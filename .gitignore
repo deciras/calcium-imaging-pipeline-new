@@ -1,0 +1,78 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.ipynb_checkpoints/
+
+# Environments
+.env
+.venv/
+venv/
+env/
+*.conda
+*.egg-info/
+
+# macOS / Linux
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Large calcium imaging raw/intermediate data
+*.oir
+*.oib
+*.tif
+*.tiff
+*.nd2
+*.czi
+*.lif
+
+# Large numerical outputs
+*.npy
+*.npz
+*.h5
+*.hdf5
+*.mat
+*.bin
+
+# suite2p outputs
+suite2p/
+plane0/
+plane1/
+ops.npy
+stat.npy
+iscell.npy
+F.npy
+Fneu.npy
+spks.npy
+
+# Pipeline outputs
+*_corrected_movie.tif
+*_corrected_movie.tiff
+*_preprocessed.csv
+*_roi_summary.csv
+*_response_summary.csv
+*_event_response.csv
+*_stim_events.csv
+*_stim_map.csv
+*_brightness_trace.csv
+*_stim_trace.png
+*_dff_preview.png
+*_heatmap.png
+Trace_With_Stim/
+RoiSet.zip
+NonCellRoiSet.zip
+NeuropilSet.zip
+roi_index_mapping.csv
+
+# Large data folders
+data/
+raw/
+processed/
+Processed_TIF/
+benchmark/
+
+
