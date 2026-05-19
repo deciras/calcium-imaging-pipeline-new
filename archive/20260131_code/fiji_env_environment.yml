@@ -1,0 +1,23 @@
+name: fiji_env
+channels:
+  - conda-forge  # 优先使用，对 Apple Silicon 支持最好
+  - defaults
+dependencies:
+  - python=3.9
+  - pip
+  - ca-certificates
+  - openssl
+  - setuptools
+  - wheel
+  - tzdata
+  - sqlite
+  - tk
+  - xz
+  - zlib
+  - bzip2# 创建环境（conda 会自动安装 macOS 所需的系统库）
+conda create -n fiji_env python=3.9 -y
+
+# 或者包含常用工具
+conda create -n fiji_env python=3.9 pip setuptools wheel -y
+  - ncurses
+  - readline
