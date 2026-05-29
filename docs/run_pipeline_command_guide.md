@@ -475,11 +475,74 @@ DATA_ROOT/10_population_features/
 - `<trial>_angle_response_matrix.npy`
 - `<trial>_feature_description.json`
 
+## Step 11：population similarity
+
+```bash
+cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipeline-new
+
+python3 current/run_pipeline.py \
+  --steps 11 \
+  --data-root /Users/dingyifei/Documents/calcium-imaging-pipeline-new/test_dataset \
+  --action skip \
+  --similarity-source features \
+  --min-corr 0.3 \
+  --knn 10
+```
+
+主要输出：
+
+- `<trial>_feature_similarity_matrix.npy`
+- `<trial>_trace_correlation_matrix.npy`
+- `<trial>_response_correlation_matrix.npy`
+- `<trial>_distance_matrix.npy`
+- `<trial>_similarity_edges.csv`
+- similarity heatmap PNG/PDF
+
+## Step 12：hierarchical clustering
+
+```bash
+cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipeline-new
+
+python3 current/run_pipeline.py \
+  --steps 12 \
+  --data-root /Users/dingyifei/Documents/calcium-imaging-pipeline-new/test_dataset \
+  --action skip \
+  --n-clusters 6
+```
+
+主要输出：
+
+- `<trial>_hierarchical_cluster_labels.csv`
+- `<trial>_hierarchical_cluster_summary.csv`
+- dendrogram PNG/PDF
+- clustered heatmap PNG/PDF
+- cluster mean traces PNG/PDF
+
+## Step 14：PCA 降维
+
+```bash
+cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipeline-new
+
+python3 current/run_pipeline.py \
+  --steps 14 \
+  --data-root /Users/dingyifei/Documents/calcium-imaging-pipeline-new/test_dataset \
+  --action skip
+```
+
+主要输出：
+
+- `<trial>_pca_embedding.csv`
+- `<trial>_pca_variance.csv`
+- `<trial>_embedding_summary.json`
+- PCA plot PNG/PDF
+
 ## 连续运行多个步骤
 
 例如运行 02 到 04：
 
 ```bash
+cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipeline-new
+
 python3 current/run_pipeline.py \
   --steps 02,03,04 \
   --data-root /Users/dingyifei/Documents/calcium-imaging-pipeline-new/test_dataset \
@@ -496,6 +559,8 @@ python3 current/run_pipeline.py \
 先看命令，不运行：
 
 ```bash
+cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipeline-new
+
 python3 current/run_pipeline.py \
   --steps 04 \
   --data-root /Users/dingyifei/Documents/calcium-imaging-pipeline-new/test_dataset \

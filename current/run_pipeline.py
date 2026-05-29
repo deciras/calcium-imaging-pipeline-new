@@ -57,6 +57,8 @@ class PipelineStep:
     accepts_event_options: bool = False
     accepts_stim_response_options: bool = False
     accepts_angle_options: bool = False
+    accepts_similarity_options: bool = False
+    accepts_clustering_options: bool = False
 
 
 # ``env=None`` means: run with the same Python that launched run_pipeline.py.
@@ -190,6 +192,38 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
         step_id="10",
         name="population features",
         script="10_population_features.py",
+        env="caiman",
+        accepts_data_root=True,
+        accepts_action=True,
+        accepts_step_dry_run=True,
+        accepts_output_root=True,
+    ),
+    PipelineStep(
+        step_id="11",
+        name="population similarity",
+        script="11_population_similarity.py",
+        env="caiman",
+        accepts_data_root=True,
+        accepts_action=True,
+        accepts_step_dry_run=True,
+        accepts_output_root=True,
+        accepts_similarity_options=True,
+    ),
+    PipelineStep(
+        step_id="12",
+        name="hierarchical clustering",
+        script="12_hierarchical_clustering.py",
+        env="caiman",
+        accepts_data_root=True,
+        accepts_action=True,
+        accepts_step_dry_run=True,
+        accepts_output_root=True,
+        accepts_clustering_options=True,
+    ),
+    PipelineStep(
+        step_id="14",
+        name="dimensionality reduction",
+        script="14_dimensionality_reduction.py",
         env="caiman",
         accepts_data_root=True,
         accepts_action=True,
@@ -372,6 +406,10 @@ def build_managed_step_args(
     baseline_sec: float | None,
     response_sec: float | None,
     angle_period: float | None,
+    similarity_source: str | None,
+    min_corr: float | None,
+    knn: int | None,
+    n_clusters: int | None,
 ) -> list[str]:
     """
     Build arguments understood by known step scripts.
@@ -496,6 +534,19 @@ def build_managed_step_args(
     if step.accepts_angle_options and angle_period is not None:
         managed_args.extend(["--angle-period", str(angle_period)])
 
+    if step.accepts_similarity_options:
+        similarity_options = (
+            ("--similarity-source", similarity_source),
+            ("--min-corr", min_corr),
+            ("--knn", knn),
+        )
+        for option_name, option_value in similarity_options:
+            if option_value is not None:
+                managed_args.extend([option_name, str(option_value)])
+
+    if step.accepts_clustering_options and n_clusters is not None:
+        managed_args.extend(["--n-clusters", str(n_clusters)])
+
     return managed_args
 
 
@@ -594,6 +645,10 @@ def resolve_steps(
     baseline_sec: float | None,
     response_sec: float | None,
     angle_period: float | None,
+    similarity_source: str | None,
+    min_corr: float | None,
+    knn: int | None,
+    n_clusters: int | None,
     passthrough_args: list[str],
 ) -> list[ResolvedStep]:
     """Check code directory and script files before launching anything."""
@@ -668,6 +723,10 @@ def resolve_steps(
             baseline_sec=baseline_sec,
             response_sec=response_sec,
             angle_period=angle_period,
+            similarity_source=similarity_source,
+            min_corr=min_corr,
+            knn=knn,
+            n_clusters=n_clusters,
         )
         command = build_command(
             script_path=script_path,
@@ -952,6 +1011,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--baseline-sec", type=float, default=None, help="Step 08: baseline window before stimulus onset.")
     parser.add_argument("--response-sec", type=float, default=None, help="Step 08: response window after stimulus onset.")
     parser.add_argument("--angle-period", type=float, choices=(180.0, 360.0), default=None, help="Step 09: angular period for circular tuning.")
+    parser.add_argument("--similarity-source", choices=("traces", "responses", "features"), default=None, help="Step 11: source for edge graph and heatmap.")
+    parser.add_argument("--min-corr", type=float, default=None, help="Step 11: minimum similarity for graph edges.")
+    parser.add_argument("--knn", type=int, default=None, help="Step 11: maximum neighbors per ROI.")
+    parser.add_argument("--n-clusters", type=int, default=None, help="Step 12: number of hierarchical clusters.")
     parser.add_argument(
         "--list-steps",
         action="store_true",
@@ -1066,6 +1129,10 @@ def main(argv: list[str] | None = None) -> int:
             baseline_sec=args.baseline_sec,
             response_sec=args.response_sec,
             angle_period=args.angle_period,
+            similarity_source=args.similarity_source,
+            min_corr=args.min_corr,
+            knn=args.knn,
+            n_clusters=args.n_clusters,
             passthrough_args=passthrough_args,
         )
     except Exception as exc:
