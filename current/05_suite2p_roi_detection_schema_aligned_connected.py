@@ -1,304 +1,323 @@
-# Recommended suite2p version: 0.14.4
-# ROI detection in 0.14.5 gave abnormal results on this dataset.
-# conda activate suite2p_test
-#
-# 05b: run suite2p, then export benchmark-ready outputs to:
-#   trial_dir/benchmark/suite2p/
-#       roi_mask.tif
-#       roi_label_map.tif
-#       roi_summary.csv
-#       roi_overlay.png
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Conservative suite2p ROI detection.
 
-import os
+Default layout:
+  preferred input: DATA_ROOT/04_spatial_highpass/
+  fallback input : DATA_ROOT/03_motion_correct/
+  output         : DATA_ROOT/05_suite2p_roi_detection/
+
+The input movies are not modified. suite2p outputs are written into this step's
+own output folder, with one folder per trial.
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import importlib.metadata
 import json
-import re
-import time
+import logging
+import multiprocessing as mp
+import os
 import shutil
 import traceback
-import pandas as pd
-import multiprocessing as mp
-from pathlib import Path
-from tqdm import tqdm
 from concurrent.futures import ProcessPoolExecutor, as_completed
-
-import numpy as np
-import tifffile as tf
-import suite2p
-from suite2p.run_s2p import default_ops, run_s2p
-import importlib.metadata
+from dataclasses import dataclass
+from pathlib import Path
 
 import matplotlib.pyplot as plt
+import numpy as np
+import tifffile as tf
+from tqdm import tqdm
 
-# ============================================================
-# 修复 #17：运行时版本检查
-# ============================================================
-_RECOMMENDED_S2P_VERSION = "0.14.4"
 
-try:
-    _s2p_ver = importlib.metadata.version("suite2p")
-except Exception:
-    _s2p_ver = getattr(suite2p, "__version__", "unknown")
+LOGGER = logging.getLogger("suite2p_roi_detection")
 
-if _s2p_ver != _RECOMMENDED_S2P_VERSION:
-    print(
-        f"\n{'!'*70}\n"
-        f"[WARNING] suite2p version mismatch!\n"
-        f"  Installed : {_s2p_ver}\n"
-        f"  Recommended: {_RECOMMENDED_S2P_VERSION}\n"
-        f"  ROI detection in 0.14.5 gave abnormal results on this dataset.\n"
-        f"  Activate the correct env: conda activate suite2p_test\n"
-        f"{'!'*70}\n"
+RECOMMENDED_S2P_VERSION = "0.14.4"
+STEP_NAME = "05_suite2p_roi_detection"
+
+STEP_OUTPUT_PATTERNS = (
+    "suite2p",
+    "benchmark",
+    "suite2p_run.log",
+    "suite2p_trial_summary.json",
+    "*_metadata.json",
+    "*_brightness_trace.csv",
+    "*_stim_events.csv",
+    "*_stim_map.csv",
+    "*_stim_pulse_events.csv",
+    "*_stim_trace.png",
+    "*_stim_trace.pdf",
+    "*_stim_schematic.png",
+    "*_stim_schematic.pdf",
+    "*_stim_pulse_trace.png",
+    "*_stim_pulse_trace.pdf",
+    "roi_overlay.pdf",
+)
+
+
+@dataclass(frozen=True)
+class TrialInput:
+    trial_id: str
+    rel_parent: Path
+    input_dir: Path
+    movie_path: Path
+    movie_source: str
+    metadata_path: Path | None
+
+
+@dataclass
+class RunSummary:
+    found: int = 0
+    processed: int = 0
+    skipped: int = 0
+    failed: int = 0
+
+
+def configure_logging(verbose: bool) -> None:
+    level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s | %(levelname)s | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-# ============================================================
-# 配置区域
-# ============================================================
-DATA_PATH = '/mnt/50d357b2-473b-4533-8c74-1db99704876a/yifeiding/calcium_imaging/2026_olympus_normcorrected'
 
-ROI_DETECT = True
-MIN_FRAMES = 2
-N_WORKERS = 2
-S2P_NTHREADS = 8
-BATCH_SIZE = 500
-
-SUITE2P_MODE = "overwrite"
-# "skip" / "overwrite" / "keep"
-
-CELL_DIAMETER_UM = 5.0
-MIN_DIAMETER_PX = 4
-DIAMETER_SCALE_FACTOR = 1.2
-
-THRESHOLD_SCALING = 1.2
-MAX_OVERLAP = 0.5
-SNR_THRESH = 1.5
-HIGH_PASS = 40
-SPATIAL_HP_DETECT = 10
-
-MAX_ITERATIONS = 20
-INNER_NEUROPIL_RADIUS = 2
-MIN_NEUROPIL_PIXELS = 350
-TAU = 1.0
-
-# benchmark export
-EXPORT_BENCHMARK = True
-BENCHMARK_OVERWRITE = True
-OVERLAY_FIGSIZE = (8, 8)
-OVERLAY_DPI = 150
-
-# ============================================================
-# 0) 强制限制底层 BLAS/OpenMP 线程数
-# ============================================================
-def set_low_level_thread_env():
-    os.environ.setdefault("OMP_NUM_THREADS", "1")
-    os.environ.setdefault("MKL_NUM_THREADS", "1")
-    os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
-    os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
+def default_output_root(data_root: Path) -> Path:
+    return data_root
 
 
-# ============================================================
-# 1) 通用工具
-# ============================================================
-def natural_key(s: str):
-    return [int(x) if x.isdigit() else x.lower()
-            for x in re.split(r"(\d+)", s)]
+def default_input_root(output_root: Path) -> Path:
+    hp_root = output_root / "04_spatial_highpass"
+    if hp_root.exists():
+        return hp_root
+    return output_root / "03_motion_correct"
 
-def discover_preferred_movies(root_tif_dir):
-    """
-    按 trial_dir 去重扫描输入 movie：
-    - 优先 *_spatial_highpass_movie.tif
-    - 回退 *_brightness_corrected_movie.tif
-    - 再回退 *_corrected_movie.tif
-    """
-    root_tif_dir = os.path.abspath(root_tif_dir)
 
-    trial_dirs = set()
-    for p in Path(root_tif_dir).rglob("*_spatial_highpass_movie.tif"):
-        trial_dirs.add(p.parent)
-    for p in Path(root_tif_dir).rglob("*_brightness_corrected_movie.tif"):
-        trial_dirs.add(p.parent)
-    for p in Path(root_tif_dir).rglob("*_corrected_movie.tif"):
-        if "_brightness_" in p.name:
+def step_output_root(output_root: Path) -> Path:
+    return output_root / STEP_NAME
+
+
+def trial_output_dir(step_root: Path, trial: TrialInput) -> Path:
+    if str(trial.rel_parent) in ("", "."):
+        return step_root / trial.trial_id
+    return step_root / trial.rel_parent / trial.trial_id
+
+
+def find_first_existing(folder: Path, patterns: tuple[str, ...]) -> Path | None:
+    for pattern in patterns:
+        matches = sorted(folder.glob(pattern))
+        if matches:
+            return matches[0]
+    return None
+
+
+def choose_movie(input_dir: Path) -> tuple[Path, str] | None:
+    choices = (
+        ("*_spatial_highpass_movie.tif", "spatial_highpass"),
+        ("*_spatial_highpass_movie.tiff", "spatial_highpass"),
+        ("*_brightness_corrected_movie.tif", "brightness_corrected"),
+        ("*_brightness_corrected_movie.tiff", "brightness_corrected"),
+        ("*_corrected_movie.tif", "corrected"),
+        ("*_corrected_movie.tiff", "corrected"),
+    )
+    for pattern, source in choices:
+        matches = sorted(input_dir.glob(pattern))
+        matches = [path for path in matches if "_brightness_" not in path.name or source != "corrected"]
+        if matches:
+            return matches[0], source
+    return None
+
+
+def discover_trials(input_root: Path) -> list[TrialInput]:
+    trial_dirs: set[Path] = set()
+    for pattern in (
+        "*_spatial_highpass_movie.tif",
+        "*_spatial_highpass_movie.tiff",
+        "*_brightness_corrected_movie.tif",
+        "*_brightness_corrected_movie.tiff",
+        "*_corrected_movie.tif",
+        "*_corrected_movie.tiff",
+    ):
+        for path in input_root.rglob(pattern):
+            trial_dirs.add(path.parent)
+
+    trials: list[TrialInput] = []
+    for input_dir in sorted(trial_dirs):
+        chosen = choose_movie(input_dir)
+        if chosen is None:
             continue
-        trial_dirs.add(p.parent)
-
-    discovered = []
-    for trial_dir in sorted(trial_dirs, key=lambda p: natural_key(str(p))):
-        hp = sorted(trial_dir.glob("*_spatial_highpass_movie.tif"), key=lambda p: natural_key(p.name))
-        bright = sorted(trial_dir.glob("*_brightness_corrected_movie.tif"), key=lambda p: natural_key(p.name))
-        corr = sorted(trial_dir.glob("*_corrected_movie.tif"), key=lambda p: natural_key(p.name))
-        corr = [p for p in corr if "_brightness_" not in p.name]
-
-        if len(hp) > 0:
-            discovered.append({
-                "trial_dir": str(trial_dir),
-                "movie_path": str(hp[0]),
-                "movie_source": "spatial_highpass",
-            })
-        elif len(bright) > 0:
-            discovered.append({
-                "trial_dir": str(trial_dir),
-                "movie_path": str(bright[0]),
-                "movie_source": "brightness_corrected",
-            })
-        elif len(corr) > 0:
-            discovered.append({
-                "trial_dir": str(trial_dir),
-                "movie_path": str(corr[0]),
-                "movie_source": "corrected",
-            })
-
-    return discovered
+        movie_path, source = chosen
+        trial_id = input_dir.name
+        rel_parent = input_dir.parent.relative_to(input_root)
+        metadata_path = find_first_existing(input_dir, ("*_metadata.json",))
+        trials.append(
+            TrialInput(
+                trial_id=trial_id,
+                rel_parent=rel_parent,
+                input_dir=input_dir,
+                movie_path=movie_path,
+                movie_source=source,
+                metadata_path=metadata_path,
+            )
+        )
+    return trials
 
 
-def safe_makedirs(path: str | Path):
-    Path(path).mkdir(parents=True, exist_ok=True)
+def required_outputs_done(out_dir: Path) -> bool:
+    plane0 = out_dir / "suite2p" / "plane0"
+    required = (plane0 / "stat.npy", plane0 / "ops.npy", plane0 / "F.npy", plane0 / "Fneu.npy", plane0 / "iscell.npy")
+    return all(path.exists() and path.stat().st_size > 0 for path in required)
 
 
-def clear_dir_contents(path: str | Path):
-    path = Path(path)
-    if not path.exists():
-        return
-    for p in path.iterdir():
-        try:
-            if p.is_file() or p.is_symlink():
-                p.unlink()
-            elif p.is_dir():
-                shutil.rmtree(p)
-        except Exception as e:
-            print(f"    [Warning] Failed to remove {p}: {e}")
+def clean_step_outputs(out_dir: Path) -> int:
+    if not out_dir.exists():
+        return 0
+
+    removed = 0
+    for pattern in STEP_OUTPUT_PATTERNS:
+        for path in out_dir.glob(pattern):
+            if path.is_dir():
+                shutil.rmtree(path)
+                removed += 1
+                LOGGER.info("Removed old step-05 folder: %s", path)
+            elif path.is_file() or path.is_symlink():
+                path.unlink()
+                removed += 1
+                LOGGER.info("Removed old step-05 file: %s", path)
+    return removed
 
 
-def save_uint8_tiff(path: str | Path, image: np.ndarray):
-    tf.imwrite(str(path), np.asarray(image, dtype=np.uint8), imagej=True)
+def copy_if_exists(src: Path | None, dst: Path) -> bool:
+    if src is None or not src.exists():
+        return False
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dst)
+    return True
 
 
-def save_uint16_tiff(path: str | Path, image: np.ndarray):
-    tf.imwrite(str(path), np.asarray(image, dtype=np.uint16), imagej=True)
+def copy_sidecar_outputs(trial: TrialInput, out_dir: Path) -> None:
+    suffixes = (
+        "_metadata.json",
+        "_stim_events.csv",
+        "_stim_map.csv",
+        "_stim_pulse_events.csv",
+    )
+    for suffix in suffixes:
+        copy_if_exists(trial.input_dir / f"{trial.trial_id}{suffix}", out_dir / f"{trial.trial_id}{suffix}")
 
 
-# ============================================================
-# 2) 读 metadata
-# ============================================================
-def get_trial_metadata(json_path):
+def set_low_level_thread_env(num_threads: int) -> None:
+    value = str(max(1, int(num_threads)))
+    os.environ.setdefault("OMP_NUM_THREADS", value)
+    os.environ.setdefault("MKL_NUM_THREADS", value)
+    os.environ.setdefault("OPENBLAS_NUM_THREADS", value)
+    os.environ.setdefault("NUMEXPR_NUM_THREADS", value)
+
+
+def check_suite2p_version(strict: bool) -> str:
+    try:
+        version = importlib.metadata.version("suite2p")
+    except Exception:
+        version = "unknown"
+
+    if version != RECOMMENDED_S2P_VERSION:
+        message = (
+            f"suite2p version mismatch: installed={version}, "
+            f"recommended={RECOMMENDED_S2P_VERSION}. Version 0.14.5 produced abnormal ROI behavior on this dataset."
+        )
+        if strict:
+            raise RuntimeError(message)
+        LOGGER.warning(message)
+    return version
+
+
+def sanity_check_tiff_is_time_series_2d(tif_path: Path, min_frames: int) -> tuple[bool, str]:
+    try:
+        with tf.TiffFile(tif_path) as tif:
+            n_pages = len(tif.pages)
+            series = tif.series[0]
+            shape = getattr(series, "shape", None)
+            ndim = len(shape) if shape is not None else None
+            if shape is not None and len(shape) == 3 and int(shape[0]) >= min_frames:
+                return True, f"OK: shape={shape}"
+            if n_pages >= min_frames and shape is not None and len(shape) == 2:
+                return True, f"OK: multipage 2D pages={n_pages}, frame={shape}"
+            return False, f"Too few frames or unsupported shape: pages={n_pages}, shape={shape}, ndim={ndim}"
+    except Exception as exc:
+        return False, f"Failed to read TIFF: {exc}"
+
+
+def get_trial_metadata(metadata_path: Path | None, cell_diameter_um: float, min_diameter_px: int, diameter_scale: float) -> dict:
     meta = {
         "nplanes": 1,
         "fs": 1.0,
         "nchannels": 1,
         "pixel_size_um": None,
-        "diameter_px": None,
+        "diameter_px": max(min_diameter_px, int(round(cell_diameter_um))),
         "json_found": False,
     }
-
-    if not os.path.exists(json_path):
+    if metadata_path is None or not metadata_path.exists():
         return meta
 
     meta["json_found"] = True
-
     try:
-        with open(json_path, "r") as f:
-            data = json.load(f)
+        with metadata_path.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
 
-        meta["fs"] = float(
-            data.get("temporal_calibration", {}).get("fps", 1.0)
-        )
-
-        meta["nplanes"] = 1
-        meta["nchannels"] = 1
+        fps = data.get("temporal_calibration", {}).get("fps", 1.0)
+        meta["fs"] = float(fps) if fps is not None and float(fps) > 0 else 1.0
 
         physical = data.get("physical_size", {})
         dims = data.get("dimensions", {})
-
-        if physical.get("pixel_size_um") is not None:
-            pixel_size_um = float(physical["pixel_size_um"])
-            meta["pixel_size_um"] = pixel_size_um
-        else:
-            fov_width_um = physical.get("fov_width_um", physical.get("width", None))
-            width_px = dims.get("width_pixel", None)
+        pixel_size_um = physical.get("pixel_size_um")
+        if pixel_size_um is None:
+            fov_width_um = physical.get("fov_width_um", physical.get("width"))
+            width_px = dims.get("width_pixel")
             if fov_width_um is not None and width_px not in (None, 0):
                 pixel_size_um = float(fov_width_um) / float(width_px)
-                meta["pixel_size_um"] = pixel_size_um
-            else:
-                pixel_size_um = None
 
-        if pixel_size_um is not None:
-            diameter_px = CELL_DIAMETER_UM / pixel_size_um
-            diameter_px = diameter_px * DIAMETER_SCALE_FACTOR
-            diameter_px = int(round(diameter_px))
-            diameter_px = max(MIN_DIAMETER_PX, diameter_px)
-            meta["diameter_px"] = diameter_px
-
+        if pixel_size_um is not None and float(pixel_size_um) > 0:
+            pixel_size_um = float(pixel_size_um)
+            meta["pixel_size_um"] = pixel_size_um
+            diameter_px = int(round((cell_diameter_um / pixel_size_um) * diameter_scale))
+            meta["diameter_px"] = max(min_diameter_px, diameter_px)
     except Exception:
         pass
 
     return meta
 
 
-# ============================================================
-# 3) TIFF sanity check
-# ============================================================
-def sanity_check_tiff_is_time_series_2d(tif_path, min_frames=2):
-    try:
-        with tf.TiffFile(tif_path) as tif:
-            n_pages = len(tif.pages)
-            if n_pages < min_frames:
-                return False, f"Only {n_pages} page(s)"
-
-            series = tif.series[0]
-            ndim = getattr(series, "ndim", None)
-            shape = getattr(series, "shape", None)
-
-            if ndim == 3:
-                return True, f"OK: shape={shape} (T×Y×X)"
-            elif ndim == 2:
-                return True, f"OK: multipage 2D (pages={n_pages}, frame={shape})"
-            else:
-                return False, f"Unsupported ndim={ndim}, shape={shape}"
-
-    except Exception as e:
-        return False, f"Failed to read tiff: {e}"
-
-
-# ============================================================
-# 4) 每个 trial 的 ops 模板
-# ============================================================
-def build_ops_template(
-    roidetect=True,
-    batch_size=500,
-    s2p_nthreads=8,
-    diameter_px=5,
-):
+def build_ops_template(args: dict, diameter_px: int) -> dict:
     return {
         "do_registration": False,
         "nonrigid": True,
         "block_size": [128, 128],
-        "snr_thresh": SNR_THRESH,
+        "snr_thresh": args["snr_thresh"],
         "maxregshiftNR": 5,
         "nimg_init": 300,
         "maxregshift": 0.1,
         "smooth_sigma": 1.15,
         "smooth_sigma_time": 0,
-
-        "roidetect": roidetect,
+        "roidetect": True,
         "sparse_mode": False,
         "diameter": [int(diameter_px), int(diameter_px)],
         "connected": True,
-        "threshold_scaling": THRESHOLD_SCALING,
-        "max_overlap": MAX_OVERLAP,
-        "max_iterations": MAX_ITERATIONS,
-
-        "high_pass": HIGH_PASS,
-        "spatial_hp_detect": SPATIAL_HP_DETECT,
-
+        "threshold_scaling": args["threshold_scaling"],
+        "max_overlap": args["max_overlap"],
+        "max_iterations": args["max_iterations"],
+        "high_pass": args["high_pass"],
+        "spatial_hp_detect": args["spatial_hp_detect"],
         "allow_overlap": False,
         "neuropil_extract": True,
-        "inner_neuropil_radius": INNER_NEUROPIL_RADIUS,
-        "min_neuropil_pixels": MIN_NEUROPIL_PIXELS,
-
-        "tau": TAU,
-        "batch_size": int(batch_size),
-        "nthreads": int(s2p_nthreads),
+        "inner_neuropil_radius": args["inner_neuropil_radius"],
+        "min_neuropil_pixels": args["min_neuropil_pixels"],
+        "tau": args["tau"],
+        "batch_size": int(args["batch_size"]),
+        "nthreads": int(args["suite2p_threads"]),
         "combined": True,
-
         "reg_tif": False,
         "delete_bin": 0,
         "move_bin": False,
@@ -306,419 +325,328 @@ def build_ops_template(
     }
 
 
-# ============================================================
-# 5) benchmark export
-# ============================================================
-def _find_plane0_dir(trial_dir: str | Path) -> Path | None:
-    trial_dir = Path(trial_dir)
-    plane0 = trial_dir / "suite2p" / "plane0"
-    if plane0.exists():
-        return plane0
-    return None
-
-
-def _load_iscell(plane0_dir: Path, n_stat: int):
-    iscell_path = plane0_dir / "iscell.npy"
-    if not iscell_path.exists():
+def load_iscell(plane0_dir: Path, n_stat: int) -> tuple[np.ndarray, np.ndarray]:
+    path = plane0_dir / "iscell.npy"
+    if not path.exists():
         return np.ones(n_stat, dtype=bool), np.full(n_stat, np.nan, dtype=float)
-
-    iscell = np.load(iscell_path, allow_pickle=True)
+    iscell = np.load(path, allow_pickle=True)
     if iscell.ndim != 2 or iscell.shape[0] != n_stat:
         return np.ones(n_stat, dtype=bool), np.full(n_stat, np.nan, dtype=float)
-
     flags = iscell[:, 0].astype(bool)
     prob = iscell[:, 1].astype(float) if iscell.shape[1] >= 2 else np.full(n_stat, np.nan, dtype=float)
     return flags, prob
 
 
-def _build_roi_maps(stat, Ly: int, Lx: int):
-    roi_mask = np.zeros((Ly, Lx), dtype=np.uint8)
-    roi_label_map = np.zeros((Ly, Lx), dtype=np.int32)
-
-    for i, s in enumerate(stat, start=1):
-        xpix = np.asarray(s.get("xpix", []), dtype=np.int32)
-        ypix = np.asarray(s.get("ypix", []), dtype=np.int32)
-        if len(xpix) == 0 or len(ypix) == 0:
-            continue
-        good = (xpix >= 0) & (xpix < Lx) & (ypix >= 0) & (ypix < Ly)
-        xpix = xpix[good]
-        ypix = ypix[good]
+def build_roi_maps(stat, ly: int, lx: int) -> tuple[np.ndarray, np.ndarray]:
+    roi_mask = np.zeros((ly, lx), dtype=np.uint8)
+    roi_label_map = np.zeros((ly, lx), dtype=np.int32)
+    for index, roi in enumerate(stat, start=1):
+        xpix = np.asarray(roi.get("xpix", []), dtype=np.int32)
+        ypix = np.asarray(roi.get("ypix", []), dtype=np.int32)
+        valid = (xpix >= 0) & (xpix < lx) & (ypix >= 0) & (ypix < ly)
+        xpix = xpix[valid]
+        ypix = ypix[valid]
         if len(xpix) == 0:
             continue
         roi_mask[ypix, xpix] = 255
-        roi_label_map[ypix, xpix] = i
-
+        roi_label_map[ypix, xpix] = index
     return roi_mask, roi_label_map
 
 
-def _summarize_rois(stat, iscell_flag, prob, pixel_size_um, trial_name, prefix):
+def summarize_rois(stat, iscell_flag, prob, pixel_size_um, trial_id: str) -> list[dict]:
     rows = []
-    for i, s in enumerate(stat, start=1):
-        xpix = np.asarray(s.get("xpix", []), dtype=np.int32)
-        ypix = np.asarray(s.get("ypix", []), dtype=np.int32)
-        if len(xpix) == 0 or len(ypix) == 0:
-            area_px = 0
-            centroid_x = np.nan
-            centroid_y = np.nan
-            bbox_xmin = bbox_xmax = bbox_ymin = bbox_ymax = np.nan
-        else:
-            area_px = int(len(xpix))
-            centroid_x = float(np.mean(xpix))
-            centroid_y = float(np.mean(ypix))
-            bbox_xmin = int(np.min(xpix))
-            bbox_xmax = int(np.max(xpix))
-            bbox_ymin = int(np.min(ypix))
-            bbox_ymax = int(np.max(ypix))
-
-        med = s.get("med", [np.nan, np.nan])
-        med_y = float(med[0]) if len(med) > 0 else np.nan
-        med_x = float(med[1]) if len(med) > 1 else np.nan
-
+    for index, roi in enumerate(stat):
+        xpix = np.asarray(roi.get("xpix", []), dtype=np.int32)
+        ypix = np.asarray(roi.get("ypix", []), dtype=np.int32)
+        area_px = int(len(xpix))
         row = {
-            "trial": trial_name,
-            "prefix": prefix,
-            "roi_id": i,
-            "method": "suite2p",
-            "suite2p_index": i - 1,
-            "iscell": int(bool(iscell_flag[i - 1])) if i - 1 < len(iscell_flag) else 1,
-            "iscell_prob": float(prob[i - 1]) if i - 1 < len(prob) and np.isfinite(prob[i - 1]) else np.nan,
+            "trial": trial_id,
+            "roi_id": index + 1,
+            "suite2p_index": index,
+            "iscell": int(bool(iscell_flag[index])) if index < len(iscell_flag) else 1,
+            "iscell_prob": float(prob[index]) if index < len(prob) and np.isfinite(prob[index]) else np.nan,
             "area_px": area_px,
-            "centroid_x": centroid_x,
-            "centroid_y": centroid_y,
-            "bbox_xmin": bbox_xmin,
-            "bbox_xmax": bbox_xmax,
-            "bbox_ymin": bbox_ymin,
-            "bbox_ymax": bbox_ymax,
-            "med_x": med_x,
-            "med_y": med_y,
+            "centroid_x": float(np.mean(xpix)) if area_px else np.nan,
+            "centroid_y": float(np.mean(ypix)) if area_px else np.nan,
+            "area_um2": float(area_px * (pixel_size_um**2)) if pixel_size_um is not None else np.nan,
         }
-        row["area_um2"] = float(area_px * (pixel_size_um ** 2)) if pixel_size_um is not None else np.nan
         rows.append(row)
-
-    df = pd.DataFrame(rows)
-    if not df.empty:
-        df = df.sort_values(["iscell", "area_px", "roi_id"], ascending=[False, False, True]).reset_index(drop=True)
-    return df
+    return rows
 
 
-def _plot_roi_overlay(mean_img, stat, iscell_flag, out_png: Path, trial_name: str):
-    fig, ax = plt.subplots(figsize=OVERLAY_FIGSIZE)
+def write_csv(path: Path, rows: list[dict], fieldnames: list[str] | None = None) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if fieldnames is None:
+        keys: list[str] = []
+        for row in rows:
+            for key in row:
+                if key not in keys:
+                    keys.append(key)
+        fieldnames = keys
+
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
+
+
+def plot_roi_overlay(mean_img, stat, iscell_flag, output_path: Path, trial_id: str, dpi: int) -> None:
+    fig, ax = plt.subplots(figsize=(8, 8))
     ax.imshow(mean_img, cmap="gray")
-
-    for i, s in enumerate(stat):
-        xpix = np.asarray(s.get("xpix", []), dtype=np.int32)
-        ypix = np.asarray(s.get("ypix", []), dtype=np.int32)
-        if len(xpix) == 0 or len(ypix) == 0:
+    for index, roi in enumerate(stat):
+        xpix = np.asarray(roi.get("xpix", []), dtype=np.int32)
+        ypix = np.asarray(roi.get("ypix", []), dtype=np.int32)
+        if len(xpix) == 0:
             continue
-        color = "lime" if iscell_flag[i] else "red"
+        color = "lime" if iscell_flag[index] else "red"
         ax.scatter(xpix, ypix, s=0.5, c=color, alpha=0.7)
-
-    ax.set_title(f"Suite2p ROI overlay - {trial_name}")
+    ax.set_title(f"Suite2p ROI overlay - {trial_id}")
     ax.axis("off")
     plt.tight_layout()
-    plt.savefig(out_png, dpi=OVERLAY_DPI, bbox_inches="tight")
-    plt.close(fig)
+    try:
+        fig.savefig(output_path, dpi=dpi, bbox_inches="tight")
+        fig.savefig(output_path.with_suffix(".pdf"), bbox_inches="tight")
+    finally:
+        plt.close(fig)
 
 
-def export_suite2p_benchmark(trial_dir: str | Path, prefix: str, pixel_size_um=None):
-    plane0_dir = _find_plane0_dir(trial_dir)
-    if plane0_dir is None:
-        raise FileNotFoundError(f"suite2p/plane0 not found: {trial_dir}")
+def export_suite2p_summary(out_dir: Path, trial_id: str, pixel_size_um: float | None, dpi: int) -> tuple[int, int]:
+    plane0 = out_dir / "suite2p" / "plane0"
+    stat = np.load(plane0 / "stat.npy", allow_pickle=True)
+    ops = np.load(plane0 / "ops.npy", allow_pickle=True).item()
+    ly = int(ops.get("Ly"))
+    lx = int(ops.get("Lx"))
+    mean_img = np.asarray(ops.get("meanImg", np.zeros((ly, lx))), dtype=np.float32)
 
-    stat_path = plane0_dir / "stat.npy"
-    ops_path = plane0_dir / "ops.npy"
+    iscell_flag, prob = load_iscell(plane0, len(stat))
+    roi_mask, roi_label_map = build_roi_maps(stat, ly=ly, lx=lx)
+    roi_summary = summarize_rois(stat, iscell_flag, prob, pixel_size_um, trial_id)
 
-    if not stat_path.exists():
-        raise FileNotFoundError(f"stat.npy not found: {stat_path}")
-    if not ops_path.exists():
-        raise FileNotFoundError(f"ops.npy not found: {ops_path}")
+    bench_dir = out_dir / "benchmark" / "suite2p"
+    bench_dir.mkdir(parents=True, exist_ok=True)
+    tf.imwrite(bench_dir / "roi_mask.tif", roi_mask, imagej=True)
+    tf.imwrite(bench_dir / "roi_label_map.tif", roi_label_map.astype(np.uint16), imagej=True)
+    write_csv(bench_dir / "roi_summary.csv", roi_summary)
+    plot_roi_overlay(mean_img, stat, iscell_flag, bench_dir / "roi_overlay.png", trial_id, dpi=dpi)
+    return int(len(stat)), int(np.sum(iscell_flag))
 
-    stat = np.load(stat_path, allow_pickle=True)
-    ops = np.load(ops_path, allow_pickle=True).item()
 
-    Ly = int(ops.get("Ly"))
-    Lx = int(ops.get("Lx"))
-    mean_img = ops.get("meanImg", None)
-    if mean_img is None:
-        mean_img = np.zeros((Ly, Lx), dtype=np.float32)
-    else:
-        mean_img = np.asarray(mean_img, dtype=np.float32)
+def run_one_trial(payload: dict) -> dict:
+    set_low_level_thread_env(payload["num_threads"])
 
-    iscell_flag, prob = _load_iscell(plane0_dir, len(stat))
-    roi_mask, roi_label_map = _build_roi_maps(stat, Ly=Ly, Lx=Lx)
-    roi_summary = _summarize_rois(
-        stat=stat,
-        iscell_flag=iscell_flag,
-        prob=prob,
-        pixel_size_um=pixel_size_um,
-        trial_name=Path(trial_dir).name,
-        prefix=prefix,
-    )
+    import suite2p
+    from suite2p.run_s2p import default_ops, run_s2p
 
-    out_dir = Path(trial_dir) / "benchmark" / "suite2p"
-    safe_makedirs(out_dir)
-    if BENCHMARK_OVERWRITE:
-        clear_dir_contents(out_dir)
-        safe_makedirs(out_dir)
+    trial_id = payload["trial_id"]
+    movie_path = Path(payload["movie_path"])
+    input_dir = Path(payload["input_dir"])
+    out_dir = Path(payload["out_dir"])
+    metadata_path = Path(payload["metadata_path"]) if payload["metadata_path"] else None
+    log_path = out_dir / "suite2p_run.log"
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-    save_uint8_tiff(out_dir / "roi_mask.tif", roi_mask)
+    def log(message: str) -> None:
+        with log_path.open("a", encoding="utf-8") as handle:
+            handle.write(message.rstrip() + "\n")
 
-    max_label = int(np.max(roi_label_map)) if roi_label_map.size > 0 else 0
-    if max_label <= np.iinfo(np.uint16).max:
-        save_uint16_tiff(out_dir / "roi_label_map.tif", roi_label_map.astype(np.uint16))
-    else:
-        tf.imwrite(str(out_dir / "roi_label_map.tif"), roi_label_map.astype(np.uint32), imagej=False)
+    try:
+        ok, info = sanity_check_tiff_is_time_series_2d(movie_path, payload["min_frames"])
+        log(f"movie_path: {movie_path}")
+        log(f"input_dir: {input_dir}")
+        log(f"out_dir: {out_dir}")
+        log(f"sanity_check: {info}")
+        if not ok:
+            return {"trial": trial_id, "status": "skipped", "message": info, "n_rois": 0, "n_iscell": 0}
 
-    roi_summary.to_csv(out_dir / "roi_summary.csv", index=False)
-    _plot_roi_overlay(mean_img, stat, iscell_flag, out_dir / "roi_overlay.png", Path(trial_dir).name)
+        meta = get_trial_metadata(
+            metadata_path=metadata_path,
+            cell_diameter_um=payload["cell_diameter_um"],
+            min_diameter_px=payload["min_diameter_px"],
+            diameter_scale=payload["diameter_scale"],
+        )
+        ops = default_ops()
+        ops.update(build_ops_template(payload, diameter_px=meta["diameter_px"]))
+        ops.update({"nplanes": meta["nplanes"], "fs": meta["fs"], "nchannels": meta["nchannels"]})
 
+        db = {
+            "data_path": [str(input_dir)],
+            "tiff_list": [movie_path.name],
+            "save_path0": str(out_dir),
+            "nchannels": meta["nchannels"],
+            "nplanes": meta["nplanes"],
+        }
+
+        log(f"suite2p_version: {getattr(suite2p, '__version__', 'unknown')}")
+        log(f"movie_source: {payload['movie_source']}")
+        log(f"diameter_px: {meta['diameter_px']}")
+        log(f"threshold_scaling: {payload['threshold_scaling']}")
+        log(f"snr_thresh: {payload['snr_thresh']}")
+        log("run_s2p starting")
+        run_s2p(ops=ops, db=db)
+        log("run_s2p finished")
+
+        n_rois, n_iscell = export_suite2p_summary(
+            out_dir=out_dir,
+            trial_id=trial_id,
+            pixel_size_um=meta["pixel_size_um"],
+            dpi=payload["overlay_dpi"],
+        )
+        with (out_dir / "suite2p_trial_summary.json").open("w", encoding="utf-8") as handle:
+            json.dump(
+                {
+                    "trial": trial_id,
+                    "movie_path": str(movie_path),
+                    "movie_source": payload["movie_source"],
+                    "metadata_path": str(metadata_path) if metadata_path else None,
+                    "diameter_px": meta["diameter_px"],
+                    "n_rois": n_rois,
+                    "n_iscell": n_iscell,
+                },
+                handle,
+                indent=2,
+            )
+        return {"trial": trial_id, "status": "ok", "message": "success", "n_rois": n_rois, "n_iscell": n_iscell}
+    except Exception as exc:
+        log("ERROR:")
+        log(str(exc))
+        log(traceback.format_exc())
+        return {"trial": trial_id, "status": "failed", "message": str(exc), "n_rois": 0, "n_iscell": 0}
+
+
+def payload_for_trial(trial: TrialInput, out_dir: Path, args: argparse.Namespace) -> dict:
     return {
-        "benchmark_dir": str(out_dir),
-        "n_rois": int(len(stat)),
-        "n_iscell": int(np.sum(iscell_flag)),
+        "trial_id": trial.trial_id,
+        "input_dir": str(trial.input_dir),
+        "movie_path": str(trial.movie_path),
+        "movie_source": trial.movie_source,
+        "metadata_path": str(trial.metadata_path) if trial.metadata_path else None,
+        "out_dir": str(out_dir),
+        "min_frames": args.min_frames,
+        "num_threads": args.num_threads,
+        "cell_diameter_um": args.cell_diameter_um,
+        "min_diameter_px": args.min_diameter_px,
+        "diameter_scale": args.diameter_scale,
+        "threshold_scaling": args.threshold_scaling,
+        "max_overlap": args.max_overlap,
+        "snr_thresh": args.snr_thresh,
+        "high_pass": args.high_pass,
+        "spatial_hp_detect": args.spatial_hp_detect,
+        "max_iterations": args.max_iterations,
+        "inner_neuropil_radius": args.inner_neuropil_radius,
+        "min_neuropil_pixels": args.min_neuropil_pixels,
+        "tau": args.tau,
+        "batch_size": args.batch_size,
+        "suite2p_threads": args.suite2p_threads,
+        "overlay_dpi": args.overlay_dpi,
     }
 
 
-# ============================================================
-# 6) 子进程任务：处理一个 corrected_movie
-# ============================================================
-def _process_one_trial(
-    movie_path: str,
-    movie_source: str,
-    min_frames: int,
-    roidetect: bool,
-    batch_size: int,
-    s2p_nthreads: int,
-    suite2p_mode: str,
-):
-    set_low_level_thread_env()
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Run conservative suite2p ROI detection.")
+    parser.add_argument("--data-root", type=Path, required=True, help="Original data root.")
+    parser.add_argument("--input-root", type=Path, help="Movie root. Default: 04_spatial_highpass if present, else 03_motion_correct.")
+    parser.add_argument("--output-root", type=Path, help="Pipeline output root. Default: DATA_ROOT.")
+    parser.add_argument("--action", choices=("skip", "overwrite"), default="skip", help="Existing-output behavior.")
+    parser.add_argument("--dry-run", action="store_true", help="Print work plan without running suite2p.")
+    parser.add_argument("--strict-suite2p-version", action="store_true", help="Fail if suite2p is not version 0.14.4.")
+    parser.add_argument("--n-workers", type=int, default=1, help="Number of trials to run in parallel.")
+    parser.add_argument("--num-threads", type=int, default=1, help="Low-level BLAS/OpenMP thread limit per worker.")
+    parser.add_argument("--suite2p-threads", type=int, default=8, help="suite2p nthreads setting.")
+    parser.add_argument("--batch-size", type=int, default=500)
+    parser.add_argument("--min-frames", type=int, default=2)
+    parser.add_argument("--cell-diameter-um", type=float, default=5.0)
+    parser.add_argument("--min-diameter-px", type=int, default=4)
+    parser.add_argument("--diameter-scale", type=float, default=1.2)
+    parser.add_argument("--threshold-scaling", type=float, default=1.2)
+    parser.add_argument("--max-overlap", type=float, default=0.5)
+    parser.add_argument("--snr-thresh", type=float, default=1.5)
+    parser.add_argument("--high-pass", type=int, default=40)
+    parser.add_argument("--spatial-hp-detect", type=int, default=10)
+    parser.add_argument("--max-iterations", type=int, default=20)
+    parser.add_argument("--inner-neuropil-radius", type=int, default=2)
+    parser.add_argument("--min-neuropil-pixels", type=int, default=350)
+    parser.add_argument("--tau", type=float, default=1.0)
+    parser.add_argument("--overlay-dpi", type=int, default=150)
+    parser.add_argument("--verbose", action="store_true")
+    return parser
 
-    trial_dir = os.path.dirname(movie_path)
-    stack_name = os.path.basename(movie_path)
 
-    exp_id = (stack_name
-              .replace("_corrected_movie.tif", "")
-              .replace("_corrected_movie.tiff", ""))
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    configure_logging(args.verbose)
 
-    log_path = os.path.join(trial_dir, "suite2p_run.log")
+    check_suite2p_version(strict=args.strict_suite2p_version)
 
-    def log(msg: str):
-        with open(log_path, "a") as f:
-            f.write(msg.rstrip() + "\n")
+    data_root = args.data_root.expanduser().resolve()
+    output_root = args.output_root.expanduser().resolve() if args.output_root else default_output_root(data_root).resolve()
+    input_root = args.input_root.expanduser().resolve() if args.input_root else default_input_root(output_root).resolve()
+    out_root = step_output_root(output_root)
 
-    try:
-        log(f"=== START {time.ctime()} ===")
-        log(f"movie_path           : {movie_path}")
-        log(f"movie_source         : {movie_source}")
-        log(f"exp_id               : {exp_id}")
+    if not input_root.exists():
+        if args.dry_run:
+            LOGGER.warning("Input root does not exist yet: %s", input_root)
+            return 0
+        LOGGER.error("Input root does not exist: %s", input_root)
+        return 1
 
-        suite2p_dir = os.path.join(trial_dir, "suite2p")
+    trials = discover_trials(input_root)
+    summary = RunSummary(found=len(trials))
+    LOGGER.info("Input root : %s", input_root)
+    LOGGER.info("Output root: %s", out_root)
+    LOGGER.info("Found %d trial(s) for suite2p.", len(trials))
 
-        if os.path.exists(suite2p_dir):
-            if suite2p_mode == "skip":
-                msg = "suite2p folder exists, skipping."
-                log(f"[SKIP] {msg}")
-                return ("skip", exp_id, msg, None, 0, 0)
+    payloads = []
+    for trial in trials:
+        out_dir = trial_output_dir(out_root, trial)
+        if required_outputs_done(out_dir) and args.action == "skip":
+            summary.skipped += 1
+            LOGGER.info("[skip] %s", trial.trial_id)
+            continue
+        if args.dry_run:
+            summary.processed += 1
+            LOGGER.info("[dry-run] Would run suite2p on %s -> %s", trial.movie_path, out_dir)
+            continue
+        if args.action == "overwrite":
+            clean_step_outputs(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        copy_sidecar_outputs(trial, out_dir)
+        payloads.append(payload_for_trial(trial, out_dir, args))
 
-            elif suite2p_mode == "overwrite":
-                log("[INFO] removing existing suite2p folder...")
-                shutil.rmtree(suite2p_dir)
+    results: list[dict] = []
+    if payloads:
+        if args.n_workers <= 1:
+            for payload in tqdm(payloads, desc="suite2p"):
+                results.append(run_one_trial(payload))
+        else:
+            context = mp.get_context("spawn")
+            with ProcessPoolExecutor(max_workers=args.n_workers, mp_context=context) as executor:
+                futures = [executor.submit(run_one_trial, payload) for payload in payloads]
+                for future in tqdm(as_completed(futures), total=len(futures), desc="suite2p"):
+                    results.append(future.result())
 
-            elif suite2p_mode == "keep":
-                log("[INFO] suite2p folder exists, keeping old results.")
-
+        for result in results:
+            if result["status"] == "ok":
+                summary.processed += 1
+                LOGGER.info("[ok] %s: n_rois=%s n_iscell=%s", result["trial"], result["n_rois"], result["n_iscell"])
+            elif result["status"] == "skipped":
+                summary.skipped += 1
+                LOGGER.info("[skip] %s: %s", result["trial"], result["message"])
             else:
-                raise ValueError(f"Unknown suite2p_mode: {suite2p_mode}")
+                summary.failed += 1
+                LOGGER.error("[failed] %s: %s", result["trial"], result["message"])
 
-        ok, info = sanity_check_tiff_is_time_series_2d(
-            movie_path,
-            min_frames=min_frames
-        )
+        out_root.mkdir(parents=True, exist_ok=True)
+        write_csv(out_root / "suite2p_summary.csv", results)
 
-        if not ok:
-            log(f"[SKIP] sanity_check failed: {info}")
-            return ("skip", exp_id, info, None, 0, 0)
-
-        log(f"sanity_check         : {info}")
-
-        if movie_source == "spatial_highpass":
-            json_path = movie_path \
-                .replace("_spatial_highpass_movie.tif", "_metadata.json") \
-                .replace("_spatial_highpass_movie.tiff", "_metadata.json")
-        elif movie_source == "brightness_corrected":
-            json_path = movie_path \
-                .replace("_brightness_corrected_movie.tif", "_metadata.json") \
-                .replace("_brightness_corrected_movie.tiff", "_metadata.json")
-        else:
-            json_path = movie_path \
-                .replace("_corrected_movie.tif", "_metadata.json") \
-                .replace("_corrected_movie.tiff", "_metadata.json")
-
-        meta = get_trial_metadata(json_path)
-
-        n_planes = meta["nplanes"]
-        fs = meta["fs"]
-        n_channels = meta["nchannels"]
-        pixel_size_um = meta["pixel_size_um"]
-
-        if meta["diameter_px"] is None:
-            diameter_px = max(MIN_DIAMETER_PX, int(round(CELL_DIAMETER_UM)))
-        else:
-            diameter_px = meta["diameter_px"]
-
-        ops_template = build_ops_template(
-            roidetect=roidetect,
-            batch_size=batch_size,
-            s2p_nthreads=s2p_nthreads,
-            diameter_px=diameter_px,
-        )
-
-        log(f"json_found           : {meta['json_found']}")
-        log(f"params: n_planes={n_planes}, fs={fs}, n_channels={n_channels}")
-        log(f"pixel_size_um        : {pixel_size_um}")
-        log(f"cell_diameter_um     : {CELL_DIAMETER_UM}")
-        log(f"diameter_px          : {diameter_px}")
-        log(f"ops[diameter]        : {ops_template['diameter']}")
-        log(f"ops[threshold_scaling]: {ops_template['threshold_scaling']}")
-        log(f"ops[max_overlap]     : {ops_template['max_overlap']}")
-        log(f"ops[high_pass]       : {ops_template['high_pass']}")
-        log(f"ops[spatial_hp_detect]: {ops_template['spatial_hp_detect']}")
-        log(f"ops[snr_thresh]      : {ops_template['snr_thresh']}")
-        log(f"db[data_path]        : {[trial_dir]}")
-        log(f"db[tiff_list]        : {[stack_name]}")
-
-        ops = default_ops()
-        ops.update(ops_template)
-        ops.update({
-            "nplanes": n_planes,
-            "fs": fs,
-            "nchannels": n_channels,
-        })
-
-        db = {
-            "data_path": [trial_dir],
-            "tiff_list": [stack_name],
-            "save_path0": trial_dir,
-            "nchannels": n_channels,
-            "nplanes": n_planes,
-        }
-
-        log("[RUN] run_s2p starting...")
-        run_s2p(ops=ops, db=db)
-        log("[RUN] run_s2p finished.")
-
-        n_rois = 0
-        n_iscell = 0
-        if EXPORT_BENCHMARK:
-            bench_info = export_suite2p_benchmark(
-                trial_dir=trial_dir,
-                prefix=exp_id,
-                pixel_size_um=pixel_size_um,
-            )
-            n_rois = bench_info["n_rois"]
-            n_iscell = bench_info["n_iscell"]
-            log(f"[BENCHMARK] exported to: {bench_info['benchmark_dir']}")
-            log(f"[BENCHMARK] n_rois={n_rois}, n_iscell={n_iscell}")
-
-        log(f"=== DONE {time.ctime()} ===")
-
-        return ("ok", exp_id, "success", diameter_px, n_rois, n_iscell)
-
-    except Exception as e:
-        log("[ERROR] Exception occurred!")
-        log(str(e))
-        log(traceback.format_exc())
-        return ("error", exp_id, str(e), None, 0, 0)
-
-
-# ============================================================
-# 7) 主函数：并行调度
-# ============================================================
-def run_suite2p_inplace(
-    root_tif_dir,
-    roidetect=True,
-    min_frames=2,
-    n_workers=2,
-    s2p_nthreads=8,
-    batch_size=500,
-    suite2p_mode="skip",
-):
-    set_low_level_thread_env()
-
-    root_tif_dir = os.path.abspath(root_tif_dir)
-    discovered = discover_preferred_movies(root_tif_dir)
-
-    if not discovered:
-        print(f"[No files] {root_tif_dir} 下没找到 *_spatial_highpass_movie.tif / *_brightness_corrected_movie.tif / *_corrected_movie.tif")
-        return
-
-    print(f"找到 {len(discovered)} 个 trial，开始处理...")
-
-    ctx = mp.get_context("spawn")
-    futures = []
-    results = []
-
-    with ProcessPoolExecutor(max_workers=int(n_workers), mp_context=ctx) as ex:
-        for item in discovered:
-            futures.append(
-                ex.submit(
-                    _process_one_trial,
-                    item["movie_path"],
-                    item["movie_source"],
-                    min_frames,
-                    roidetect,
-                    batch_size,
-                    s2p_nthreads,
-                    suite2p_mode,
-                )
-            )
-
-        for fu in tqdm(as_completed(futures), total=len(futures), desc="Suite2p (inplace)"):
-            status, exp_id, msg, diameter_px, n_rois, n_iscell = fu.result()
-
-            tqdm.write(f"[{status.upper()}] {exp_id}: {msg}")
-
-            movie_source = "unknown"
-            for item in discovered:
-                candidate = os.path.basename(item["movie_path"])
-                candidate = candidate.replace("_spatial_highpass_movie.tif", "").replace("_brightness_corrected_movie.tif", "").replace("_corrected_movie.tif", "")
-                if candidate == exp_id:
-                    movie_source = item["movie_source"]
-                    break
-
-            results.append({
-                "trial": exp_id,
-                "status": status,
-                "message": msg,
-                "movie_source": movie_source,
-                "diameter_px": diameter_px,
-                "n_rois": n_rois,
-                "n_iscell": n_iscell,
-            })
-
-    summary_path = os.path.join(root_tif_dir, "suite2p_summary.csv")
-    df = pd.DataFrame(results)
-    df.to_csv(summary_path, index=False)
-
-    print("\nSummary saved:")
-    print(summary_path)
-
-    print("\nROI count preview:")
-    cols = [c for c in ["trial", "status", "movie_source", "diameter_px", "n_rois", "n_iscell"] if c in df.columns]
-    print(df[cols].head())
-
-    print("\nAll done.")
+    LOGGER.info("Summary:")
+    LOGGER.info("  found: %d", summary.found)
+    LOGGER.info("  processed or would process: %d", summary.processed)
+    LOGGER.info("  skipped: %d", summary.skipped)
+    LOGGER.info("  failed: %d", summary.failed)
+    return 1 if summary.failed else 0
 
 
 if __name__ == "__main__":
-    run_suite2p_inplace(
-        root_tif_dir=DATA_PATH,
-        roidetect=ROI_DETECT,
-        min_frames=MIN_FRAMES,
-        n_workers=N_WORKERS,
-        s2p_nthreads=S2P_NTHREADS,
-        batch_size=BATCH_SIZE,
-        suite2p_mode=SUITE2P_MODE,
-    )
-
-    print("Done.")
+    raise SystemExit(main())

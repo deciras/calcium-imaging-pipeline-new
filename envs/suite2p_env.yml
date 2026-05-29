@@ -1,0 +1,14 @@
+name: suite2p
+channels:
+  - conda-forge
+dependencies:
+  - python=3.9
+  - numpy
+  - scipy
+  - scikit-learn
+  - matplotlib
+  - tifffile
+  - tqdm
+  - pip
+  - pip:
+      - suite2p==0.14.4

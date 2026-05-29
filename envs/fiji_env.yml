@@ -1,0 +1,16 @@
+name: fiji_env
+channels:
+  - conda-forge
+dependencies:
+  - python=3.9
+  - openjdk=11
+  - numpy
+  - scipy
+  - pandas
+  - tifffile
+  - imageio
+  - pip
+  - pip:
+      - pyimagej
+      - scyjava
+      - jpype1

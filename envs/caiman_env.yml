@@ -1,0 +1,15 @@
+name: caiman
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - caiman
+  - numpy
+  - scipy
+  - pandas
+  - matplotlib
+  - tifffile
+  - opencv
+  - psutil
+  - tqdm
+  - holoviews

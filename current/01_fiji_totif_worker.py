@@ -1,16 +1,21 @@
 # @File (label="Select Root Directory", style="directory") rootDir
+# @File (label="Select Pipeline Output Root", style="directory") outputRoot
 # @String (label="File Extension", value=".oir") ext
 # @Integer (label="Max Threads", value=8) threads
 # @String (label="Existing output mode", value="skip") existingMode
+# @String (label="Projection mode", value="auto") projectionMode
+# @String (label="Metadata mode", value="update-missing") metadataMode
+# @String (label="Stim analog export mode", value="projected") stimExportMode
 
 import os
 import json
 import glob
+import re
 import shutil
 import traceback
 
 from java.lang import System
-from ij import IJ
+from ij import IJ, ImagePlus, ImageStack
 from ij.plugin import ZProjector, Duplicator
 from loci.plugins import BF
 from loci.plugins.in import ImporterOptions
@@ -27,15 +32,18 @@ from loci.plugins.in import ImporterOptions
 # Output layout
 # -------------
 # For input:
-#   DATA_ROOT/Processed_TIF_YYYYMMDD/<trial>/<trial>.oir
-# or generally:
+#   DATA_ROOT/<trial>/<trial>.oir
+# or:
 #   DATA_ROOT/<date_folder>/<trial>/<trial>.oir
 #
 # Output:
-#   DATA_ROOT/Processed_TIF_<date_folder>/<trial>/
+#   OUTPUT_ROOT/01_oir_to_tif/<trial>/
+# or:
+#   OUTPUT_ROOT/01_oir_to_tif/<date_folder>/<trial>/
 #       <title>_metadata.json
 #       <title>_Max_Proj.tif
 #       <title>_Stim_Analog.tif   # if channel 2 exists
+#       <title>_Stim_Analog_Raw/      # optional unprojected plane series
 #
 # Existing-output behavior
 # ------------------------
@@ -53,6 +61,11 @@ from loci.plugins.in import ImporterOptions
 
 # -------------------- Configuration --------------------
 VALID_EXISTING_MODES = set(["skip", "overwrite", "keep"])
+VALID_PROJECTION_MODES = set(["auto", "safe", "fast"])
+VALID_METADATA_MODES = set(["skip", "update-missing", "refresh"])
+VALID_STIM_EXPORT_MODES = set(["projected", "raw", "both"])
+AUTO_FAST_MAX_TIMEPOINTS = 600
+AUTO_FAST_MAX_Z_SLICES = 5
 
 # If True, strict skip requires Stim_Analog.tif for already-known two-channel
 # outputs. Because we cannot know nC without opening the .oir, the default
@@ -67,6 +80,9 @@ STEP01_OUTPUT_PATTERNS = [
     "*_Max_Proj.tiff",
     "*_Stim_Analog.tif",
     "*_Stim_Analog.tiff",
+    "*_Stim_Analog_Raw.tif",
+    "*_Stim_Analog_Raw.tiff",
+    "*_Stim_Analog_Raw",
 ]
 # -------------------------------------------------------
 
@@ -88,6 +104,76 @@ def normalize_existing_mode(mode):
     return mode
 
 
+def normalize_projection_mode(mode):
+    mode = _as_str(mode).strip().lower()
+    if mode == "":
+        mode = "auto"
+    aliases = {
+        "memory-safe": "safe",
+        "memsafe": "safe",
+        "speed": "fast",
+    }
+    mode = aliases.get(mode, mode)
+    if mode not in VALID_PROJECTION_MODES:
+        print("[WARNING] Unknown projectionMode='{}'; using 'auto'.".format(mode))
+        mode = "auto"
+    return mode
+
+
+def normalize_metadata_mode(mode):
+    mode = _as_str(mode).strip().lower()
+    if mode == "":
+        mode = "update-missing"
+    aliases = {
+        "update": "update-missing",
+        "missing": "update-missing",
+        "none": "skip",
+        "off": "skip",
+    }
+    mode = aliases.get(mode, mode)
+    if mode not in VALID_METADATA_MODES:
+        print("[WARNING] Unknown metadataMode='{}'; using 'update-missing'.".format(mode))
+        mode = "update-missing"
+    return mode
+
+
+def normalize_stim_export_mode(mode):
+    mode = _as_str(mode).strip().lower()
+    if mode == "":
+        mode = "projected"
+    aliases = {
+        "projection": "projected",
+        "zprojected": "projected",
+        "z-projected": "projected",
+        "unprojected": "raw",
+        "raw-stack": "raw",
+    }
+    mode = aliases.get(mode, mode)
+    if mode not in VALID_STIM_EXPORT_MODES:
+        print("[WARNING] Unknown stimExportMode='{}'; using 'projected'.".format(mode))
+        mode = "projected"
+    return mode
+
+
+def choose_projection_mode(requested_mode, nZ, nT):
+    """
+    Pick a projection strategy.
+
+    fast:
+        Duplicates a full channel stack, then lets ImageJ project it. Faster,
+        but can use a lot of Java heap.
+    safe:
+        Projects one timepoint at a time. Slower, but much lower peak memory.
+    auto:
+        Use fast only for smaller movies; otherwise use safe.
+    """
+    if requested_mode in ["fast", "safe"]:
+        return requested_mode
+    if nT <= AUTO_FAST_MAX_TIMEPOINTS and nZ <= AUTO_FAST_MAX_Z_SLICES:
+        return "fast"
+    return "safe"
+
+
 def strip_oir_extensions(filename):
     """
     Remove common Olympus/Bio-Formats sidecar extensions to infer the output title.
@@ -106,6 +192,42 @@ def sanitize_title_from_filename(filename):
     return strip_oir_extensions(filename).replace(" ", "")
 
 
+def validate_oir_file_group(file_path):
+    """
+    Check that Olympus split-file sidecars are consecutive before Bio-Formats opens them.
+
+    Missing sidecar files can make Bio-Formats emit thousands of "No pixel blocks"
+    warnings while still writing unusable TIFFs. Failing early is safer.
+    """
+    folder = os.path.dirname(file_path)
+    base = strip_oir_extensions(os.path.basename(file_path))
+    sidecar_numbers = []
+
+    try:
+        for name in os.listdir(folder):
+            if not name.startswith(base + "_"):
+                continue
+            suffix = name[len(base) + 1:]
+            if re.match(r"^\d+$", suffix):
+                sidecar_numbers.append(int(suffix))
+    except Exception as e:
+        return False, "could not list OIR folder: {}".format(e)
+
+    if len(sidecar_numbers) == 0:
+        return True, "single-file-oir"
+
+    sidecar_numbers = sorted(sidecar_numbers)
+    expected = range(1, sidecar_numbers[-1] + 1)
+    missing = [n for n in expected if n not in sidecar_numbers]
+    if missing:
+        preview = ", ".join(["_{0:05d}".format(n) for n in missing[:10]])
+        if len(missing) > 10:
+            preview += ", ..."
+        return False, "missing split-file sidecars: {}".format(preview)
+
+    return True, "sidecars-ok"
+
+
 def file_nonempty(path):
     return os.path.exists(path) and os.path.isfile(path) and os.path.getsize(path) > 0
 
@@ -118,7 +240,42 @@ def find_existing_file(output_dir_path, title, suffixes):
     return None
 
 
-def is_step01_done(output_dir_path, title):
+def raw_stim_series_dir(output_dir_path, title):
+    return os.path.join(output_dir_path, title + "_Stim_Analog_Raw")
+
+
+def raw_stim_series_complete(output_dir_path, title):
+    manifest_path = os.path.join(raw_stim_series_dir(output_dir_path, title), "manifest.json")
+    if not file_nonempty(manifest_path):
+        return False
+    try:
+        with open(manifest_path, "r") as handle:
+            manifest = json.load(handle)
+        expected = int(manifest.get("file_count", manifest.get("frame_count", 0)))
+    except Exception:
+        return False
+    if expected <= 0:
+        return False
+    frame_files = glob.glob(os.path.join(raw_stim_series_dir(output_dir_path, title), "t*.tif"))
+    return len(frame_files) >= expected
+
+
+def metadata_channel_count(output_dir_path, title):
+    metadata_path = find_existing_file(output_dir_path, title, ["_metadata.json"])
+    if metadata_path is None:
+        return None
+    try:
+        with open(metadata_path, "r") as handle:
+            data = json.load(handle)
+        channels = data.get("dimensions", {}).get("channels")
+        if channels is None:
+            return None
+        return int(channels)
+    except Exception:
+        return None
+
+
+def is_step01_done(output_dir_path, title, stim_export_mode):
     """
     Check whether the expensive OIR-to-TIF conversion is already complete.
 
@@ -141,7 +298,74 @@ def is_step01_done(output_dir_path, title):
         if stim is None:
             return False
 
+    if stim_export_mode in ["raw", "both"]:
+        channels = metadata_channel_count(output_dir_path, title)
+        if channels is not None and channels >= 2:
+            raw_stim = find_existing_file(
+                output_dir_path,
+                title,
+                ["_Stim_Analog_Raw.tif", "_Stim_Analog_Raw.tiff"],
+            )
+            if raw_stim is None and not raw_stim_series_complete(output_dir_path, title):
+                return False
+
     return True
+
+
+def metadata_has_acquisition_start(metadata_path):
+    if not file_nonempty(metadata_path):
+        return False
+    try:
+        with open(metadata_path, "r") as handle:
+            data = json.load(handle)
+        start_time = data.get("acquisition", {}).get("start_time")
+        return start_time is not None and str(start_time).strip() != ""
+    except Exception:
+        return False
+
+
+def update_metadata_json_from_oir(file_path, output_dir_path, title, metadata_mode):
+    """
+    Refresh lightweight metadata fields without opening or rewriting TIFF movies.
+
+    This is used when step-01 outputs already exist. It lets us add fields such
+    as acquisition.start_time while still skipping expensive TIFF generation.
+    """
+    if metadata_mode == "skip":
+        return "skipped"
+
+    metadata_path = find_existing_file(output_dir_path, title, ["_metadata.json"])
+    if metadata_path is None:
+        return "missing-json"
+
+    if metadata_mode == "update-missing" and metadata_has_acquisition_start(metadata_path):
+        return "already-current"
+
+    acquisition_start_time = find_oir_creation_datetime(file_path)
+    if acquisition_start_time is None:
+        return "no-oir-time"
+
+    try:
+        with open(metadata_path, "r") as handle:
+            data = json.load(handle)
+    except Exception as e:
+        print("[WARNING] Could not read metadata JSON for refresh {}: {}".format(metadata_path, e))
+        return "read-failed"
+
+    data["source_oir_path"] = str(file_path)
+    data["acquisition"] = {
+        "start_time": acquisition_start_time,
+        "start_time_source": "oir_base_creationDateTime",
+    }
+
+    try:
+        with open(metadata_path, "w") as handle:
+            handle.write(json.dumps(data, indent=4))
+        print("[METADATA] Updated acquisition.start_time in: " + metadata_path)
+        return "updated"
+    except Exception as e:
+        print("[WARNING] Could not write metadata JSON refresh {}: {}".format(metadata_path, e))
+        return "write-failed"
 
 
 def clean_step01_outputs(output_dir_path):
@@ -169,7 +393,38 @@ def clean_step01_outputs(output_dir_path):
     return removed
 
 
-def save_metadata_json(imp, output_dir_path, title):
+def find_oir_creation_datetime(file_path):
+    """
+    Extract the first Olympus XML creation timestamp without loading the movie.
+
+    OIR files commonly contain repeated tags like:
+      <base:creationDateTime>2026-04-28T17:04:11.070+08:00</base:creationDateTime>
+
+    Reading in chunks keeps this safe for large recordings.
+    """
+    pattern = re.compile(r"<base:creationDateTime>([^<]+)</base:creationDateTime>")
+    overlap = ""
+    chunk_size = 1024 * 1024
+
+    try:
+        with open(file_path, "rb") as handle:
+            while True:
+                chunk = handle.read(chunk_size)
+                if not chunk:
+                    break
+
+                text = overlap + chunk.decode("utf-8", "ignore")
+                match = pattern.search(text)
+                if match:
+                    return match.group(1).strip()
+                overlap = text[-256:]
+    except Exception as e:
+        print("[WARNING] Failed to read OIR creationDateTime from {}: {}".format(file_path, e))
+
+    return None
+
+
+def save_metadata_json(imp, output_dir_path, title, source_oir_path, stim_export_mode):
     cal = imp.getCalibration()
 
     width_px = int(imp.getWidth())
@@ -201,8 +456,15 @@ def save_metadata_json(imp, output_dir_path, title):
     else:
         pixel_size_um = None
 
+    acquisition_start_time = find_oir_creation_datetime(source_oir_path)
+
     meta_dict = {
         "filename": str(title),
+        "source_oir_path": str(source_oir_path),
+        "acquisition": {
+            "start_time": acquisition_start_time,
+            "start_time_source": "oir_base_creationDateTime" if acquisition_start_time else "",
+        },
         "dimensions": {
             "width_pixel": width_px,
             "height_pixel": height_px,
@@ -224,6 +486,10 @@ def save_metadata_json(imp, output_dir_path, title):
             "width": fov_width_um,
             "height": fov_height_um,
         },
+        "step01_settings": {
+            "projection_mode": _as_str(projectionMode),
+            "stim_export_mode": stim_export_mode,
+        },
     }
 
     json_path = os.path.join(output_dir_path, str(title) + "_metadata.json")
@@ -237,44 +503,230 @@ def save_metadata_json(imp, output_dir_path, title):
         print("Failed to save JSON metadata: " + str(e))
 
 
-def save_max_projection_single_channel(imp, output_path, nZ):
-    zp = ZProjector(imp)
-    zp.setMethod(ZProjector.MAX_METHOD)
-    zp.setStopSlice(nZ)
-    zp.doHyperStackProjection(True)
-    imp_max = zp.getProjection()
-    IJ.saveAsTiff(imp_max, output_path)
-    imp_max.close()
+def copy_calibration(src_imp, dst_imp):
+    try:
+        dst_imp.setCalibration(src_imp.getCalibration().copy())
+    except Exception:
+        try:
+            dst_imp.setCalibration(src_imp.getCalibration())
+        except Exception:
+            pass
 
 
-def save_channel_z_projection(imp, channel_index, nZ, nT, output_path):
-    imp_c = Duplicator().run(imp, channel_index, channel_index, 1, nZ, 1, nT)
-    zp = ZProjector(imp_c)
-    zp.setMethod(ZProjector.MAX_METHOD)
-    zp.setStartSlice(1)
-    zp.setStopSlice(nZ)
-    zp.doHyperStackProjection(True)
-    proj = zp.getProjection()
-    IJ.saveAsTiff(proj, output_path)
-    proj.close()
-    imp_c.close()
+def save_channel_z_projection_timewise(imp, channel_index, nZ, nT, output_path):
+    """
+    Z-project one channel one timepoint at a time.
+
+    This avoids Duplicator(channel, all z, all timepoints), which can double or
+    triple memory use and caused Java heap OOM on large Olympus OIR files.
+    """
+    out_stack = ImageStack(imp.getWidth(), imp.getHeight())
+    duplicator = Duplicator()
+
+    for t in range(1, nT + 1):
+        if t == 1 or t == nT or t % 100 == 0:
+            print("      projecting channel {}, timepoint {}/{}".format(channel_index, t, nT))
+
+        imp_t = None
+        proj = None
+        try:
+            imp_t = duplicator.run(imp, channel_index, channel_index, 1, nZ, t, t)
+            zp = ZProjector(imp_t)
+            zp.setMethod(ZProjector.MAX_METHOD)
+            zp.setStartSlice(1)
+            zp.setStopSlice(nZ)
+            zp.doProjection()
+            proj = zp.getProjection()
+            out_stack.addSlice(proj.getProcessor().duplicate())
+        finally:
+            try:
+                if proj is not None:
+                    proj.close()
+            except Exception:
+                pass
+            try:
+                if imp_t is not None:
+                    imp_t.close()
+            except Exception:
+                pass
+            if t % 50 == 0:
+                System.gc()
+
+    out_imp = ImagePlus(os.path.basename(output_path), out_stack)
+    copy_calibration(imp, out_imp)
+    if nT > 1:
+        out_imp.setDimensions(1, 1, nT)
+    IJ.saveAsTiff(out_imp, output_path)
+    out_imp.close()
+    System.gc()
+
+
+def save_channel_z_projection_fast(imp, channel_index, nZ, nT, output_path):
+    """
+    Faster full-channel projection. Use only when memory budget is comfortable.
+    """
+    imp_c = None
+    proj = None
+    try:
+        imp_c = Duplicator().run(imp, channel_index, channel_index, 1, nZ, 1, nT)
+        zp = ZProjector(imp_c)
+        zp.setMethod(ZProjector.MAX_METHOD)
+        zp.setStartSlice(1)
+        zp.setStopSlice(nZ)
+        zp.doHyperStackProjection(True)
+        proj = zp.getProjection()
+        IJ.saveAsTiff(proj, output_path)
+    finally:
+        try:
+            if proj is not None:
+                proj.close()
+        except Exception:
+            pass
+        try:
+            if imp_c is not None:
+                imp_c.close()
+        except Exception:
+            pass
+        System.gc()
+
+
+def save_max_projection_single_channel(imp, output_path, nZ, nT):
+    save_channel_z_projection_timewise(imp, 1, nZ, nT, output_path)
+
+
+def save_channel_z_projection(imp, channel_index, nZ, nT, output_path, projection_mode):
+    actual_mode = choose_projection_mode(projection_mode, nZ, nT)
+    print("      projection mode for channel {}: {}".format(channel_index, actual_mode))
+    if actual_mode == "fast":
+        save_channel_z_projection_fast(imp, channel_index, nZ, nT, output_path)
+    else:
+        save_channel_z_projection_timewise(imp, channel_index, nZ, nT, output_path)
 
 
 def save_single_z_channel(imp, channel_index, nT, output_path):
-    imp_c = Duplicator().run(imp, channel_index, channel_index, 1, 1, 1, nT)
-    IJ.saveAsTiff(imp_c, output_path)
-    imp_c.close()
+    out_stack = ImageStack(imp.getWidth(), imp.getHeight())
+    duplicator = Duplicator()
+
+    for t in range(1, nT + 1):
+        if t == 1 or t == nT or t % 100 == 0:
+            print("      exporting channel {}, timepoint {}/{}".format(channel_index, t, nT))
+
+        imp_t = None
+        try:
+            imp_t = duplicator.run(imp, channel_index, channel_index, 1, 1, t, t)
+            out_stack.addSlice(imp_t.getProcessor().duplicate())
+        finally:
+            try:
+                if imp_t is not None:
+                    imp_t.close()
+            except Exception:
+                pass
+            if t % 50 == 0:
+                System.gc()
+
+    out_imp = ImagePlus(os.path.basename(output_path), out_stack)
+    copy_calibration(imp, out_imp)
+    if nT > 1:
+        out_imp.setDimensions(1, 1, nT)
+    IJ.saveAsTiff(out_imp, output_path)
+    out_imp.close()
+    System.gc()
 
 
-def process_oir(file_path, output_dir_path):
+def save_channel_raw_z_time_series(imp, channel_index, nZ, nT, output_dir_path):
+    """
+    Save one channel without Z projection as one small Z stack per timepoint.
+
+    A single raw Z/T TIFF stack can be very large and forces ImageJ to keep
+    too much data in Java heap. Writing one timepoint at a time keeps peak
+    memory low while avoiding thousands of single-plane files.
+    """
+    duplicator = Duplicator()
+
+    if os.path.exists(output_dir_path):
+        shutil.rmtree(output_dir_path)
+    os.makedirs(output_dir_path)
+
+    frame_count = 0
+    for t in range(1, nT + 1):
+        if t == 1 or t == nT or t % 50 == 0:
+            print("      exporting raw channel {}, timepoint {}/{}".format(channel_index, t, nT))
+
+        out_stack = ImageStack(imp.getWidth(), imp.getHeight())
+        for z in range(1, nZ + 1):
+            imp_zt = None
+            try:
+                imp_zt = duplicator.run(imp, channel_index, channel_index, z, z, t, t)
+                out_stack.addSlice(imp_zt.getProcessor().duplicate())
+            finally:
+                try:
+                    if imp_zt is not None:
+                        imp_zt.close()
+                except Exception:
+                    pass
+
+        out_imp = None
+        try:
+            out_imp = ImagePlus("t{0:06d}".format(t), out_stack)
+            copy_calibration(imp, out_imp)
+            if nZ > 1:
+                out_imp.setDimensions(1, nZ, 1)
+            frame_name = "t{0:06d}.tif".format(t)
+            IJ.saveAsTiff(out_imp, os.path.join(output_dir_path, frame_name))
+            frame_count += 1
+        finally:
+            try:
+                if out_imp is not None:
+                    out_imp.close()
+            except Exception:
+                pass
+
+        if t % 25 == 0:
+            System.gc()
+
+    manifest = {
+        "format": "stim_analog_raw_timepoint_z_stack_series",
+        "channel": channel_index,
+        "z_slices": nZ,
+        "timepoints": nT,
+        "plane_count": int(nZ * nT),
+        "frame_count": frame_count,
+        "file_count": frame_count,
+        "file_name_pattern": "t%06d.tif",
+        "order": "one_z_stack_per_timepoint",
+        "width_pixel": int(imp.getWidth()),
+        "height_pixel": int(imp.getHeight()),
+    }
+    with open(os.path.join(output_dir_path, "manifest.json"), "w") as handle:
+        handle.write(json.dumps(manifest, indent=4))
+    System.gc()
+
+
+def should_write_projected_stim(stim_export_mode):
+    return stim_export_mode in ["projected", "both"]
+
+
+def should_write_raw_stim(stim_export_mode):
+    return stim_export_mode in ["raw", "both"]
+
+
+def process_oir(file_path, output_dir_path, projection_mode, stim_export_mode):
     print("-" * 30)
-    print("Opening (Full RAM Mode): " + file_path)
+    print("Opening (Bio-Formats virtual mode): " + file_path)
 
     options = ImporterOptions()
     options.setId(file_path)
     options.setGroupFiles(True)
     options.setOpenAllSeries(False)
-    options.setVirtual(False)
+    options.setVirtual(True)
+    try:
+        options.setAutoscale(False)
+    except Exception:
+        pass
+    try:
+        options.setWindowless(True)
+    except Exception:
+        pass
 
     imp = None
     try:
@@ -291,25 +743,30 @@ def process_oir(file_path, output_dir_path):
         nT = int(imp.getNFrames())
         nC = int(imp.getNChannels())
 
-        save_metadata_json(imp, output_dir_path, title)
+        save_metadata_json(imp, output_dir_path, title, file_path, stim_export_mode)
         print("Metadata: {} Channels, {} Z-Slices, {} Timepoints".format(nC, nZ, nT))
 
         max_proj_path = os.path.join(output_dir_path, title + "_Max_Proj.tif")
         stim_path = os.path.join(output_dir_path, title + "_Stim_Analog.tif")
+        stim_raw_path = raw_stim_series_dir(output_dir_path, title)
 
         if nZ > 1:
             if nC == 1:
                 print("Calculating Max Projection for single channel...")
-                save_max_projection_single_channel(imp, max_proj_path, nZ)
+                save_channel_z_projection(imp, 1, nZ, nT, max_proj_path, projection_mode)
                 print("Projection saved: " + max_proj_path)
 
             elif nC == 2:
                 print("Calculating Max Projections for each channel...")
-                save_channel_z_projection(imp, 1, nZ, nT, max_proj_path)
+                save_channel_z_projection(imp, 1, nZ, nT, max_proj_path, projection_mode)
                 print("Channel 1 Max Projection saved: " + max_proj_path)
 
-                save_channel_z_projection(imp, 2, nZ, nT, stim_path)
-                print("Channel 2 Stim Analog saved: " + stim_path)
+                if should_write_projected_stim(stim_export_mode):
+                    save_channel_z_projection(imp, 2, nZ, nT, stim_path, projection_mode)
+                    print("Channel 2 Stim Analog saved: " + stim_path)
+                if should_write_raw_stim(stim_export_mode):
+                    save_channel_raw_z_time_series(imp, 2, nZ, nT, stim_raw_path)
+                    print("Channel 2 raw Stim Analog plane series saved: " + stim_raw_path)
 
             else:
                 print(
@@ -317,11 +774,15 @@ def process_oir(file_path, output_dir_path):
                     "Saving channel 1 as Max_Proj.tif and channel 2 as Stim_Analog.tif; "
                     "channels 3+ are ignored.".format(nC)
                 )
-                save_channel_z_projection(imp, 1, nZ, nT, max_proj_path)
+                save_channel_z_projection(imp, 1, nZ, nT, max_proj_path, projection_mode)
                 print("Channel 1 Max Projection saved: " + max_proj_path)
 
-                save_channel_z_projection(imp, 2, nZ, nT, stim_path)
-                print("Channel 2 Stim Analog saved: " + stim_path)
+                if should_write_projected_stim(stim_export_mode):
+                    save_channel_z_projection(imp, 2, nZ, nT, stim_path, projection_mode)
+                    print("Channel 2 Stim Analog saved: " + stim_path)
+                if should_write_raw_stim(stim_export_mode):
+                    save_channel_raw_z_time_series(imp, 2, nZ, nT, stim_raw_path)
+                    print("Channel 2 raw Stim Analog plane series saved: " + stim_raw_path)
 
         else:
             print("Only one Z-Slice detected. Saving individual channels as TIF.")
@@ -329,8 +790,12 @@ def process_oir(file_path, output_dir_path):
                 save_single_z_channel(imp, 1, nT, max_proj_path)
                 print("Channel 1 saved: " + max_proj_path)
             if nC >= 2:
-                save_single_z_channel(imp, 2, nT, stim_path)
-                print("Channel 2 saved: " + stim_path)
+                if should_write_projected_stim(stim_export_mode):
+                    save_single_z_channel(imp, 2, nT, stim_path)
+                    print("Channel 2 saved: " + stim_path)
+                if should_write_raw_stim(stim_export_mode):
+                    save_channel_raw_z_time_series(imp, 2, nZ, nT, stim_raw_path)
+                    print("Channel 2 raw plane series saved: " + stim_raw_path)
 
         return True
 
@@ -347,7 +812,7 @@ def process_oir(file_path, output_dir_path):
             pass
 
 
-def should_skip_or_prepare(file_path, target_dir, existing_mode):
+def should_skip_or_prepare(file_path, target_dir, existing_mode, metadata_mode, stim_export_mode):
     """
     Returns True if caller should skip processing this file.
     """
@@ -357,8 +822,15 @@ def should_skip_or_prepare(file_path, target_dir, existing_mode):
         os.makedirs(target_dir)
 
     if existing_mode == "skip":
-        if is_step01_done(target_dir, title_guess):
+        if is_step01_done(target_dir, title_guess, stim_export_mode):
+            metadata_status = update_metadata_json_from_oir(
+                file_path=file_path,
+                output_dir_path=target_dir,
+                title=title_guess,
+                metadata_mode=metadata_mode,
+            )
             print("[SKIP] Step 01 output already exists: {} -> {}".format(title_guess, target_dir))
+            print("[SKIP] Metadata refresh status: {}".format(metadata_status))
             return True
         print("[RUN] Missing or incomplete Step 01 output: {}".format(title_guess))
         return False
@@ -373,18 +845,28 @@ def should_skip_or_prepare(file_path, target_dir, existing_mode):
     return False
 
 
-def infer_output_target(root_path, input_root, oir_filename):
+def safe_get_output_root(root_path):
     """
-    Reproduce the original output layout:
-      output_base = root_path / ("Processed_TIF_" + parent_dir_name)
-      target_dir  = output_base / basename(input_root)
+    Use the launcher-provided outputRoot when available.
+    Fall back to DATA_ROOT for older Fiji calls.
+    """
+    try:
+        out = outputRoot.getAbsolutePath()
+        if out:
+            return out
+    except Exception:
+        pass
+    return root_path
 
-    Example:
-      root_path = .../2026_olympus
-      input_root = .../2026_olympus/20260204/Euprymna_retina_590_0001
-      parent_dir_name = 20260204
-      target_dir = .../2026_olympus/Processed_TIF_20260204/Euprymna_retina_590_0001
+
+def infer_output_target(root_path, output_root_path, input_root, oir_filename):
     """
+    Unified output layout:
+      output_root_path/01_oir_to_tif/<trial>/
+      output_root_path/01_oir_to_tif/<date_or_session>/<trial>/
+    """
+    root_abs = os.path.abspath(root_path)
+    input_abs = os.path.abspath(input_root)
     parent_dir_name = os.path.basename(os.path.dirname(input_root))
     trial_dir_name = os.path.basename(input_root)
 
@@ -393,33 +875,66 @@ def infer_output_target(root_path, input_root, oir_filename):
     if trial_dir_name == parent_dir_name or trial_dir_name == os.path.basename(root_path):
         trial_dir_name = sanitize_title_from_filename(oir_filename)
 
-    output_base = os.path.join(root_path, "Processed_TIF_" + parent_dir_name)
-    target_dir = os.path.join(output_base, trial_dir_name.replace(" ", ""))
+    rel_parent = os.path.relpath(os.path.dirname(input_abs), root_abs)
+    step_root = os.path.join(output_root_path, "01_oir_to_tif")
+    if rel_parent in [".", ""]:
+        target_dir = os.path.join(step_root, trial_dir_name.replace(" ", ""))
+    else:
+        target_dir = os.path.join(
+            step_root,
+            rel_parent.replace(" ", ""),
+            trial_dir_name.replace(" ", ""),
+        )
     return target_dir
 
 
 def main():
     root_path = rootDir.getAbsolutePath()
+    output_root_path = safe_get_output_root(root_path)
     existing_mode = normalize_existing_mode(existingMode)
+    projection_mode = normalize_projection_mode(projectionMode)
+    metadata_mode = normalize_metadata_mode(metadataMode)
+    stim_export_mode = normalize_stim_export_mode(stimExportMode)
 
     print("\n" + "=" * 60)
     print("01 Fiji OIR-to-TIF worker")
     print("Root path     : " + root_path)
+    print("Output root   : " + output_root_path)
     print("Extension     : " + ext)
     print("Threads param : " + str(threads) + " (kept for compatibility; current loop is sequential)")
     print("Existing mode : " + existing_mode)
+    print("Projection mode: " + projection_mode)
+    print("Metadata mode : " + metadata_mode)
+    print("Stim export   : " + stim_export_mode)
     print("=" * 60)
 
     n_found = 0
     n_skipped = 0
     n_done = 0
     n_failed = 0
+    n_invalid = 0
+    n_metadata_updated = 0
+
+    root_path_abs = os.path.abspath(root_path)
+    output_root_abs = os.path.abspath(output_root_path)
 
     for root, dirs, files in os.walk(root_path):
         # Do not walk into generated output folders.
-        dirs[:] = [d for d in dirs if not d.startswith("Processed_TIF_")]
+        dirs[:] = [
+            d for d in dirs
+            if not d.startswith("Processed_TIF_")
+            and d != "pipeline_outputs"
+            and not (re.match(r"^\d{2}_", d) and d != "00_original_files")
+        ]
 
+        root_abs = os.path.abspath(root)
         if "Processed_TIF_" in root:
+            continue
+        if (
+            output_root_abs != root_path_abs
+            and root_abs.startswith(output_root_abs)
+            and not root_abs.startswith(root_path_abs)
+        ):
             continue
 
         for f in files:
@@ -428,14 +943,28 @@ def main():
 
             n_found += 1
             file_path = os.path.join(root, f)
-            target_dir = infer_output_target(root_path, root, f)
+            target_dir = infer_output_target(root_path, output_root_path, root, f)
 
             try:
-                if should_skip_or_prepare(file_path, target_dir, existing_mode):
+                valid_group, group_status = validate_oir_file_group(file_path)
+                if not valid_group:
+                    print("[WARNING] Incomplete Olympus OIR file group skipped: {}".format(file_path))
+                    print("[WARNING] {}".format(group_status))
+                    print("[WARNING] Cleaning any Step 01 outputs for incomplete trial: " + target_dir)
+                    clean_step01_outputs(target_dir)
+                    n_invalid += 1
                     n_skipped += 1
                     continue
 
-                ok = process_oir(file_path, target_dir)
+                if should_skip_or_prepare(file_path, target_dir, existing_mode, metadata_mode, stim_export_mode):
+                    title_guess = sanitize_title_from_filename(file_path)
+                    metadata_path = find_existing_file(target_dir, title_guess, ["_metadata.json"])
+                    if metadata_path is not None and metadata_has_acquisition_start(metadata_path):
+                        n_metadata_updated += 1
+                    n_skipped += 1
+                    continue
+
+                ok = process_oir(file_path, target_dir, projection_mode, stim_export_mode)
                 if ok:
                     n_done += 1
                 else:
@@ -454,12 +983,17 @@ def main():
     print("Found   : {}".format(n_found))
     print("Skipped : {}".format(n_skipped))
     print("Done    : {}".format(n_done))
+    print("Invalid input skipped: {}".format(n_invalid))
+    print("Metadata with acquisition.start_time: {}".format(n_metadata_updated))
     print("Failed  : {}".format(n_failed))
     print("=" * 60)
 
+    return 1 if n_failed else 0
+
 
 try:
-    main()
+    System.exit(main())
 except Exception as main_e:
     print("Main loop error: " + str(main_e))
     traceback.print_exc()
+    System.exit(1)
