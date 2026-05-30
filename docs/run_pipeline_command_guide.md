@@ -284,6 +284,8 @@ python3 current/run_pipeline.py \
 
 05c 会读取 05 的 suite2p ROI，再用 05b 从历史手画 ROI 得到的形状和 trace 信息做质控。它不会修改 05 的原始 suite2p 输出，只会生成新的 curated 文件夹。
 
+重要：05c 默认不相信 suite2p 的 `iscell` 分类。也就是说，suite2p 说某个 ROI 不是 cell，05c 仍然可以把它救回来。只有手动加 `--require-suite2p-iscell` 时，才会要求 suite2p 也认为它是 cell。
+
 安全运行：
 
 ```bash
@@ -344,6 +346,49 @@ DATA_ROOT/05c_roi_quality_filter/
 - `<trial>_roi_quality_trace_qc.pdf`
 - `<trial>_roi_quality_ranked_candidates.csv`
 - `<trial>_roi_quality_summary.json`
+
+## Step 05d：寻找 suite2p 漏画的 ROI 候选
+
+05d 解决的是另一个问题：如果 suite2p 根本没有画出某个肉眼可见细胞，05c 没法从不存在的 ROI 里把它救回来。05d 会独立看图像本身，提出一批“可能是漏掉的 ROI”的候选。
+
+推荐运行：
+
+```bash
+cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipeline-new
+
+python3 current/run_pipeline.py \
+  --steps 05d \
+  --data-root /Users/dingyifei/Documents/calcium-imaging-pipeline-new/test_dataset \
+  --action overwrite
+```
+
+更明确地指定参数：
+
+```bash
+cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipeline-new
+
+python3 current/run_pipeline.py \
+  --steps 05d \
+  --data-root /Users/dingyifei/Documents/calcium-imaging-pipeline-new/test_dataset \
+  --action overwrite \
+  --step-args '--image-source max_proj --peak-z-threshold 4.0 --max-suite2p-overlap 0.25 --max-candidates 800 --extract-traces'
+```
+
+说明：
+
+- 05d 不使用 suite2p 的 `iscell` 分类
+- 05d 会参考 suite2p 已经画出的 ROI 位置，用来标记哪些候选是“新的/可能漏掉的”
+- `--peak-z-threshold` 越高，候选越少、越保守
+- `--max-suite2p-overlap 0.25` 表示和已有 suite2p ROI 重叠超过 25% 的候选不算 novel
+- 这一版输出的是候选列表，不会自动替代 05c 进入 06
+
+主要输出：
+
+- `<trial>_independent_roi_candidates.csv`
+- `<trial>_independent_roi_candidates_summary.json`
+- `<trial>_independent_roi_candidate_label_map.tif`
+- `<trial>_independent_roi_candidate_overlay.png`
+- `<trial>_independent_roi_candidate_overlay.pdf`
 
 ## Step 06：提取 dF/F
 

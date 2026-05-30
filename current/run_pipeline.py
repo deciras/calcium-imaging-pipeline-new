@@ -157,6 +157,17 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
         accepts_roi_filter_options=True,
     ),
     PipelineStep(
+        step_id="05d",
+        name="independent ROI candidates",
+        script="05d_independent_roi_candidates.py",
+        env="caiman",
+        accepts_data_root=True,
+        accepts_action=True,
+        accepts_step_dry_run=True,
+        accepts_output_root=True,
+        accepts_dpi=True,
+    ),
+    PipelineStep(
         step_id="06",
         name="extract dF/F",
         script="06_extract_dff.py",
