@@ -59,6 +59,7 @@ class PipelineStep:
     accepts_angle_options: bool = False
     accepts_similarity_options: bool = False
     accepts_clustering_options: bool = False
+    accepts_leiden_options: bool = False
 
 
 # ``env=None`` means: run with the same Python that launched run_pipeline.py.
@@ -221,9 +222,40 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
         accepts_clustering_options=True,
     ),
     PipelineStep(
+        step_id="13",
+        name="Leiden community detection",
+        script="13_leiden_community_detection.py",
+        env="caiman",
+        accepts_data_root=True,
+        accepts_action=True,
+        accepts_step_dry_run=True,
+        accepts_output_root=True,
+        accepts_leiden_options=True,
+    ),
+    PipelineStep(
         step_id="14",
         name="dimensionality reduction",
         script="14_dimensionality_reduction.py",
+        env="caiman",
+        accepts_data_root=True,
+        accepts_action=True,
+        accepts_step_dry_run=True,
+        accepts_output_root=True,
+    ),
+    PipelineStep(
+        step_id="15",
+        name="cross-trial summary",
+        script="15_cross_trial_summary.py",
+        env="caiman",
+        accepts_data_root=True,
+        accepts_action=True,
+        accepts_step_dry_run=True,
+        accepts_output_root=True,
+    ),
+    PipelineStep(
+        step_id="16",
+        name="report generation",
+        script="16_report_generator.py",
         env="caiman",
         accepts_data_root=True,
         accepts_action=True,
@@ -410,6 +442,7 @@ def build_managed_step_args(
     min_corr: float | None,
     knn: int | None,
     n_clusters: int | None,
+    leiden_resolution: float | None,
 ) -> list[str]:
     """
     Build arguments understood by known step scripts.
@@ -547,6 +580,9 @@ def build_managed_step_args(
     if step.accepts_clustering_options and n_clusters is not None:
         managed_args.extend(["--n-clusters", str(n_clusters)])
 
+    if step.accepts_leiden_options and leiden_resolution is not None:
+        managed_args.extend(["--resolution", str(leiden_resolution)])
+
     return managed_args
 
 
@@ -649,6 +685,7 @@ def resolve_steps(
     min_corr: float | None,
     knn: int | None,
     n_clusters: int | None,
+    leiden_resolution: float | None,
     passthrough_args: list[str],
 ) -> list[ResolvedStep]:
     """Check code directory and script files before launching anything."""
@@ -727,6 +764,7 @@ def resolve_steps(
             min_corr=min_corr,
             knn=knn,
             n_clusters=n_clusters,
+            leiden_resolution=leiden_resolution,
         )
         command = build_command(
             script_path=script_path,
@@ -1015,6 +1053,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-corr", type=float, default=None, help="Step 11: minimum similarity for graph edges.")
     parser.add_argument("--knn", type=int, default=None, help="Step 11: maximum neighbors per ROI.")
     parser.add_argument("--n-clusters", type=int, default=None, help="Step 12: number of hierarchical clusters.")
+    parser.add_argument("--leiden-resolution", type=float, default=None, help="Step 13: Leiden resolution parameter.")
     parser.add_argument(
         "--list-steps",
         action="store_true",
@@ -1133,6 +1172,7 @@ def main(argv: list[str] | None = None) -> int:
             min_corr=args.min_corr,
             knn=args.knn,
             n_clusters=args.n_clusters,
+            leiden_resolution=args.leiden_resolution,
             passthrough_args=passthrough_args,
         )
     except Exception as exc:

@@ -536,6 +536,67 @@ python3 current/run_pipeline.py \
 - `<trial>_embedding_summary.json`
 - PCA plot PNG/PDF
 
+## Step 13：Leiden community detection
+
+```bash
+cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipeline-new
+
+python3 current/run_pipeline.py \
+  --steps 13 \
+  --data-root /Users/dingyifei/Documents/calcium-imaging-pipeline-new/test_dataset \
+  --action skip \
+  --leiden-resolution 1.0
+```
+
+说明：
+
+- 13 依赖 optional packages：`igraph` 和 `leidenalg`
+- 如果没装，会写出 skipped summary，但不会让 pipeline 失败
+
+主要输出：
+
+- `<trial>_leiden_labels.csv`
+- `<trial>_graph_edges.csv`
+- `<trial>_leiden_community_summary.csv`
+- `<trial>_leiden_summary.json`
+
+## Step 15：跨 trial 汇总
+
+```bash
+cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipeline-new
+
+python3 current/run_pipeline.py \
+  --steps 15 \
+  --data-root /Users/dingyifei/Documents/calcium-imaging-pipeline-new/test_dataset \
+  --action skip
+```
+
+主要输出：
+
+- `all_trials_roi_summary.csv`
+- `all_trials_event_summary.csv`
+- `all_trials_stim_response_summary.csv`
+- `all_trials_angle_tuning_summary.csv`
+- `cross_trial_qc_summary.csv`
+- `cross_trial_summary.json`
+- cross-trial QC PNG/PDF
+
+## Step 16：HTML report
+
+```bash
+cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipeline-new
+
+python3 current/run_pipeline.py \
+  --steps 16 \
+  --data-root /Users/dingyifei/Documents/calcium-imaging-pipeline-new/test_dataset \
+  --action skip
+```
+
+主要输出：
+
+- `DATA_ROOT/16_reports/global_report.html`
+- `DATA_ROOT/16_reports/<trial>_report.html`
+
 ## 连续运行多个步骤
 
 例如运行 02 到 04：
