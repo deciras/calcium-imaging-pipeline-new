@@ -52,6 +52,7 @@ class PipelineStep:
     accepts_clip_negative: bool = False
     accepts_dpi: bool = False
     accepts_suite2p_options: bool = False
+    accepts_manual_prior_options: bool = False
     accepts_roi_filter_options: bool = False
     accepts_dff_options: bool = False
     accepts_event_options: bool = False
@@ -133,6 +134,16 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
         accepts_step_dry_run=True,
         accepts_output_root=True,
         accepts_suite2p_options=True,
+    ),
+    PipelineStep(
+        step_id="05b",
+        name="manual ROI prior",
+        script="05b_manual_roi_prior.py",
+        env="caiman",
+        accepts_data_root=True,
+        accepts_action=True,
+        accepts_step_dry_run=True,
+        accepts_manual_prior_options=True,
     ),
     PipelineStep(
         step_id="05c",
@@ -426,9 +437,14 @@ def build_managed_step_args(
     min_neuropil_pixels: int | None,
     tau: float | None,
     overlay_dpi: int | None,
+    manual_root: Path | None,
+    manual_trace_mode: str | None,
+    manual_trace_frame_stride: int | None,
     min_quality_score: float | None,
     rule_padding_fraction: float | None,
     require_suite2p_iscell: bool,
+    trace_prior_mode: str | None,
+    trace_weight: float | None,
     neuropil_coeff: float | None,
     roi_source: str | None,
     f0_mode: str | None,
@@ -524,10 +540,25 @@ def build_managed_step_args(
             if option_value is not None:
                 managed_args.extend([option_name, str(option_value)])
 
+    if step.accepts_manual_prior_options:
+        if manual_root is not None:
+            managed_args.extend(["--manual-root", str(manual_root)])
+        manual_prior_options = (
+            ("--trace-mode", manual_trace_mode),
+            ("--trace-frame-stride", manual_trace_frame_stride),
+            ("--dpi", dpi),
+        )
+        for option_name, option_value in manual_prior_options:
+            if option_value is not None:
+                managed_args.extend([option_name, str(option_value)])
+
     if step.accepts_roi_filter_options:
         roi_filter_options = (
             ("--min-quality-score", min_quality_score),
             ("--rule-padding-fraction", rule_padding_fraction),
+            ("--trace-prior-mode", trace_prior_mode),
+            ("--trace-weight", trace_weight),
+            ("--neuropil-coeff", neuropil_coeff),
         )
         for option_name, option_value in roi_filter_options:
             if option_value is not None:
@@ -669,9 +700,14 @@ def resolve_steps(
     min_neuropil_pixels: int | None,
     tau: float | None,
     overlay_dpi: int | None,
+    manual_root: Path | None,
+    manual_trace_mode: str | None,
+    manual_trace_frame_stride: int | None,
     min_quality_score: float | None,
     rule_padding_fraction: float | None,
     require_suite2p_iscell: bool,
+    trace_prior_mode: str | None,
+    trace_weight: float | None,
     neuropil_coeff: float | None,
     roi_source: str | None,
     f0_mode: str | None,
@@ -748,9 +784,14 @@ def resolve_steps(
             min_neuropil_pixels=min_neuropil_pixels,
             tau=tau,
             overlay_dpi=overlay_dpi,
+            manual_root=manual_root,
+            manual_trace_mode=manual_trace_mode,
+            manual_trace_frame_stride=manual_trace_frame_stride,
             min_quality_score=min_quality_score,
             rule_padding_fraction=rule_padding_fraction,
             require_suite2p_iscell=require_suite2p_iscell,
+            trace_prior_mode=trace_prior_mode,
+            trace_weight=trace_weight,
             neuropil_coeff=neuropil_coeff,
             roi_source=roi_source,
             f0_mode=f0_mode,
@@ -1017,10 +1058,25 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-neuropil-pixels", type=int, default=None, help="Step 05: suite2p min_neuropil_pixels.")
     parser.add_argument("--tau", type=float, default=None, help="Step 05: suite2p calcium decay tau.")
     parser.add_argument("--overlay-dpi", type=int, default=None, help="Step 05: ROI overlay PNG/PDF figure DPI.")
-    parser.add_argument("--min-quality-score", type=float, default=None, help="Step 05c: minimum fraction of manual-prior shape checks that must pass.")
+    parser.add_argument("--manual-root", type=Path, default=None, help="Step 05b: folder containing historical RoiSet.zip files and matching trace exports.")
+    parser.add_argument(
+        "--manual-trace-mode",
+        choices=("none", "summary", "full"),
+        default=None,
+        help="Step 05b: extract manual ROI trace summaries; full also writes per-frame traces.",
+    )
+    parser.add_argument("--manual-trace-frame-stride", type=int, default=None, help="Step 05b: use every Nth TIFF frame if traces must be extracted from a movie.")
+    parser.add_argument("--min-quality-score", type=float, default=None, help="Step 05c: minimum combined manual-prior quality score.")
     parser.add_argument("--rule-padding-fraction", type=float, default=None, help="Step 05c: expand manual-prior p05-p95 ranges by this fraction.")
+    parser.add_argument(
+        "--trace-prior-mode",
+        choices=("shape-only", "trace-report", "shape-and-trace"),
+        default=None,
+        help="Step 05c: whether trace features are reported only or also used for filtering.",
+    )
+    parser.add_argument("--trace-weight", type=float, default=None, help="Step 05c: weight of trace score in the combined ROI quality score.")
     parser.add_argument("--require-suite2p-iscell", action="store_true", help="Step 05c: require suite2p iscell==1 in addition to shape prior.")
-    parser.add_argument("--neuropil-coeff", type=float, default=None, help="Step 06: coefficient for suite2p Fneu subtraction.")
+    parser.add_argument("--neuropil-coeff", type=float, default=None, help="Steps 05c/06: coefficient for suite2p Fneu subtraction.")
     parser.add_argument(
         "--roi-source",
         choices=("auto", "curated", "suite2p", "all"),
@@ -1114,6 +1170,7 @@ def main(argv: list[str] | None = None) -> int:
     data_root = args.data_root.expanduser().resolve() if args.data_root else None
     output_root = args.output_root.expanduser().resolve() if args.output_root else None
     stim_log_root = args.stim_log_root.expanduser().resolve() if args.stim_log_root else None
+    manual_root = args.manual_root.expanduser().resolve() if args.manual_root else None
 
     try:
         check_conda_available(selected_steps, args.conda_bin)
@@ -1156,9 +1213,14 @@ def main(argv: list[str] | None = None) -> int:
             min_neuropil_pixels=args.min_neuropil_pixels,
             tau=args.tau,
             overlay_dpi=args.overlay_dpi,
+            manual_root=manual_root,
+            manual_trace_mode=args.manual_trace_mode,
+            manual_trace_frame_stride=args.manual_trace_frame_stride,
             min_quality_score=args.min_quality_score,
             rule_padding_fraction=args.rule_padding_fraction,
             require_suite2p_iscell=args.require_suite2p_iscell,
+            trace_prior_mode=args.trace_prior_mode,
+            trace_weight=args.trace_weight,
             neuropil_coeff=args.neuropil_coeff,
             roi_source=args.roi_source,
             f0_mode=args.f0_mode,

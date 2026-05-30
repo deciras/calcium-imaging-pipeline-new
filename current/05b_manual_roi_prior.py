@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Build a manual ROI shape prior from ImageJ/Fiji RoiSet.zip files.
+Build a manual ROI prior from ImageJ/Fiji RoiSet.zip files.
 
 Default use:
   input : a folder containing historical manual ROI folders
@@ -9,8 +9,8 @@ Default use:
 
 This script is read-only with respect to the manual ROI source folder. It does
 not modify RoiSet.zip files or TIFFs. The goal is to summarize what manually
-accepted cell ROIs look like, so later suite2p ROIs can be filtered more
-conservatively.
+accepted cell ROIs look like and how their traces behave, so later suite2p
+ROIs can be filtered more conservatively.
 """
 
 from __future__ import annotations
@@ -35,11 +35,17 @@ STEP_OUTPUT_PATTERNS = (
     "manual_roi_pairs.csv",
     "manual_roi_table.csv",
     "manual_roi_shape_summary.csv",
+    "manual_roi_trace_summary.csv",
+    "manual_roi_traces.csv",
     "manual_roi_prior.json",
     "manual_roi_area_distribution.png",
     "manual_roi_area_distribution.pdf",
     "manual_roi_diameter_distribution.png",
     "manual_roi_diameter_distribution.pdf",
+    "manual_roi_trace_dff_distribution.png",
+    "manual_roi_trace_dff_distribution.pdf",
+    "manual_roi_trace_snr_distribution.png",
+    "manual_roi_trace_snr_distribution.pdf",
 )
 
 ROI_TYPE_NAMES = {
@@ -64,6 +70,8 @@ class ManualPair:
     folder: Path
     roi_zip: Path
     reference_tif: Path | None
+    results_csv: Path | None
+    overlay_csv: Path | None
 
 
 @dataclass
@@ -129,6 +137,24 @@ def find_reference_tif(folder: Path) -> Path | None:
     return candidates[0] if candidates else None
 
 
+def find_results_csv(folder: Path) -> Path | None:
+    candidates = sorted(
+        path
+        for path in folder.glob("Results.csv")
+        if path.is_file() and not is_appledouble(path)
+    )
+    return candidates[0] if candidates else None
+
+
+def find_overlay_csv(folder: Path) -> Path | None:
+    candidates = sorted(
+        path
+        for path in folder.glob("Overlay Elements*.csv")
+        if path.is_file() and not is_appledouble(path)
+    )
+    return candidates[0] if candidates else None
+
+
 def discover_pairs(manual_root: Path) -> list[ManualPair]:
     pairs = []
     for roi_zip in sorted(manual_root.rglob("RoiSet.zip")):
@@ -143,6 +169,8 @@ def discover_pairs(manual_root: Path) -> list[ManualPair]:
                 folder=folder,
                 roi_zip=roi_zip,
                 reference_tif=find_reference_tif(folder),
+                results_csv=find_results_csv(folder),
+                overlay_csv=find_overlay_csv(folder),
             )
         )
     return pairs
@@ -229,6 +257,7 @@ def parse_imagej_roi(data: bytes) -> dict:
         "x_mean": x_mean,
         "y_mean": y_mean,
         "n_coordinates": int(n_coords),
+        "points": [[int(x), int(y)] for x, y in points],
     }
 
 
@@ -261,7 +290,223 @@ def ellipse_perimeter(width: float, height: float) -> float:
     return float(math.pi * (a + b) * (1 + 3 * h / (10 + math.sqrt(4 - 3 * h))))
 
 
-def parse_roi_zip(pair: ManualPair) -> tuple[list[dict], dict]:
+def roi_mask(parsed: dict, image_shape: tuple[int, int]) -> np.ndarray:
+    height, width = image_shape
+    mask = np.zeros((height, width), dtype=bool)
+    left = max(0, int(math.floor(float(parsed.get("left", 0)))))
+    right = min(width, int(math.ceil(float(parsed.get("right", 0)))))
+    top = max(0, int(math.floor(float(parsed.get("top", 0)))))
+    bottom = min(height, int(math.ceil(float(parsed.get("bottom", 0)))))
+    if left >= right or top >= bottom:
+        return mask
+
+    roi_type = int(parsed.get("roi_type", -1))
+    points = parsed.get("points") or []
+    if not points and parsed.get("points_json"):
+        try:
+            points = json.loads(str(parsed.get("points_json")))
+        except Exception:
+            points = []
+    if points and roi_type in {0, 4, 5}:
+        try:
+            from matplotlib.path import Path as MplPath
+
+            yy, xx = np.mgrid[top:bottom, left:right]
+            coords = np.column_stack((xx.ravel() + 0.5, yy.ravel() + 0.5))
+            inside = MplPath(np.asarray(points, dtype=float)).contains_points(coords)
+            mask[top:bottom, left:right] = inside.reshape((bottom - top, right - left))
+            return mask
+        except Exception as exc:
+            LOGGER.debug("Polygon mask failed for ROI; using bounding box fallback: %s", exc)
+
+    if roi_type == 2:
+        yy, xx = np.mgrid[top:bottom, left:right]
+        cx = float(parsed.get("left", left)) + max(float(parsed.get("width_px", right - left)), 1.0) / 2.0
+        cy = float(parsed.get("top", top)) + max(float(parsed.get("height_px", bottom - top)), 1.0) / 2.0
+        rx = max(float(parsed.get("width_px", right - left)) / 2.0, 1e-6)
+        ry = max(float(parsed.get("height_px", bottom - top)) / 2.0, 1e-6)
+        mask[top:bottom, left:right] = (((xx + 0.5 - cx) / rx) ** 2 + ((yy + 0.5 - cy) / ry) ** 2) <= 1.0
+        return mask
+
+    mask[top:bottom, left:right] = True
+    return mask
+
+
+def load_movie_as_time_yx(path: Path) -> np.ndarray:
+    import tifffile as tf
+
+    try:
+        arr = tf.memmap(path)
+    except Exception:
+        arr = tf.imread(path)
+    arr = np.asarray(arr)
+    if arr.ndim == 2:
+        return arr.reshape((1, arr.shape[-2], arr.shape[-1]))
+    if arr.ndim < 2:
+        raise ValueError(f"Unsupported TIFF shape: {arr.shape}")
+    return arr.reshape((-1, arr.shape[-2], arr.shape[-1]))
+
+
+def extract_trace(movie: np.ndarray, mask: np.ndarray, frame_stride: int) -> np.ndarray:
+    if not np.any(mask):
+        return np.asarray([], dtype=float)
+    stride = max(1, int(frame_stride))
+    sampled = movie[::stride]
+    pixels = sampled[:, mask]
+    return np.asarray(np.mean(pixels, axis=1), dtype=float)
+
+
+def summarize_trace(trace: np.ndarray, frame_stride: int) -> dict:
+    finite = np.asarray(trace[np.isfinite(trace)], dtype=float)
+    if finite.size == 0:
+        return {
+            "trace_n_frames": 0,
+            "trace_frame_stride": int(frame_stride),
+            "trace_valid_fraction": 0.0,
+        }
+
+    median = float(np.median(finite))
+    mad = float(np.median(np.abs(finite - median)))
+    robust_sigma = 1.4826 * mad
+    p05 = float(np.percentile(finite, 5))
+    p10 = float(np.percentile(finite, 10))
+    p90 = float(np.percentile(finite, 90))
+    p95 = float(np.percentile(finite, 95))
+    mean = float(np.mean(finite))
+    std = float(np.std(finite))
+    threshold = median + 3.0 * robust_sigma
+    if finite.size > 1 and std > 0:
+        lag1 = float(np.corrcoef(finite[:-1], finite[1:])[0, 1])
+    else:
+        lag1 = np.nan
+
+    baseline = max(abs(p10), 1e-6)
+    return {
+        "trace_n_frames": int(trace.size),
+        "trace_frame_stride": int(frame_stride),
+        "trace_valid_fraction": float(finite.size / max(trace.size, 1)),
+        "trace_mean": mean,
+        "trace_std": std,
+        "trace_cv": float(std / max(abs(mean), 1e-6)),
+        "trace_min": float(np.min(finite)),
+        "trace_max": float(np.max(finite)),
+        "trace_range": float(np.max(finite) - np.min(finite)),
+        "trace_p05": p05,
+        "trace_p10": p10,
+        "trace_median": median,
+        "trace_p90": p90,
+        "trace_p95": p95,
+        "trace_mad": mad,
+        "trace_robust_sigma": float(robust_sigma),
+        "trace_robust_snr": float((p95 - median) / max(robust_sigma, 1e-6)),
+        "trace_dff_p95": float((p95 - p10) / baseline),
+        "trace_event_fraction_z3": float(np.mean(finite > threshold)) if robust_sigma > 0 else 0.0,
+        "trace_lag1_autocorr": lag1 if np.isfinite(lag1) else np.nan,
+    }
+
+
+def read_overlay_roi_order(path: Path | None) -> list[str]:
+    if path is None or not path.exists():
+        return []
+    try:
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle)
+            names = []
+            for row in reader:
+                name = str(row.get("Name", "")).strip()
+                if name:
+                    names.append(name)
+            return names
+    except Exception as exc:
+        LOGGER.warning("Could not read overlay ROI order %s: %s", path, exc)
+        return []
+
+
+def read_imagej_results_traces(pair: ManualPair, roi_rows: list[dict]) -> dict[str, np.ndarray]:
+    if pair.results_csv is None or not pair.results_csv.exists():
+        return {}
+
+    overlay_order = read_overlay_roi_order(pair.overlay_csv)
+    if not overlay_order:
+        overlay_order = [Path(row["roi_file"]).stem for row in roi_rows]
+
+    try:
+        with pair.results_csv.open("r", encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle)
+            columns: dict[str, list[float]] = {name: [] for name in overlay_order}
+            for result_row in reader:
+                for idx, name in enumerate(overlay_order, start=1):
+                    raw = result_row.get(f"Mean{idx}", "")
+                    try:
+                        value = float(raw)
+                    except Exception:
+                        value = np.nan
+                    columns[name].append(value)
+        return {name: np.asarray(values, dtype=float) for name, values in columns.items()}
+    except Exception as exc:
+        LOGGER.warning("Could not read ImageJ Results trace table %s: %s", pair.results_csv, exc)
+        return {}
+
+
+def add_trace_features(
+    pair: ManualPair,
+    rows: list[dict],
+    trace_mode: str,
+    frame_stride: int,
+) -> tuple[list[dict], list[dict]]:
+    if trace_mode == "none" or not rows:
+        return rows, []
+
+    results_traces = read_imagej_results_traces(pair, rows)
+    if results_traces:
+        trace_rows: list[dict] = []
+        for row in rows:
+            roi_name = Path(str(row["roi_file"])).stem
+            trace = results_traces.get(roi_name, np.asarray([], dtype=float))
+            row.update(summarize_trace(trace, frame_stride=1))
+            row["trace_source"] = "imagej_results_csv"
+            row["mask_pixel_count"] = np.nan
+            if trace_mode == "full" and trace.size:
+                trace_row = {
+                    "pair_id": row["pair_id"],
+                    "roi_index": row["roi_index"],
+                    "roi_file": row["roi_file"],
+                }
+                for frame_index, value in enumerate(trace):
+                    trace_row[f"frame_{frame_index:05d}"] = float(value) if np.isfinite(value) else np.nan
+                trace_rows.append(trace_row)
+        return rows, trace_rows
+
+    if pair.reference_tif is None:
+        return rows, []
+
+    try:
+        movie = load_movie_as_time_yx(pair.reference_tif)
+    except Exception as exc:
+        LOGGER.warning("Could not open reference TIFF for trace extraction %s: %s", pair.reference_tif, exc)
+        return rows, []
+
+    image_shape = (int(movie.shape[-2]), int(movie.shape[-1]))
+    trace_rows: list[dict] = []
+    for row in rows:
+        mask = roi_mask(row, image_shape)
+        trace = extract_trace(movie, mask, frame_stride=frame_stride)
+        row.update(summarize_trace(trace, frame_stride=frame_stride))
+        row["trace_source"] = "reference_tif"
+        row["mask_pixel_count"] = int(np.sum(mask))
+        if trace_mode == "full" and trace.size:
+            trace_row = {
+                "pair_id": row["pair_id"],
+                "roi_index": row["roi_index"],
+                "roi_file": row["roi_file"],
+            }
+            for frame_index, value in enumerate(trace):
+                trace_row[f"frame_{frame_index:05d}"] = float(value) if np.isfinite(value) else np.nan
+            trace_rows.append(trace_row)
+    return rows, trace_rows
+
+
+def parse_roi_zip(pair: ManualPair, trace_mode: str, frame_stride: int) -> tuple[list[dict], dict, list[dict]]:
     rows = []
     height, width, tiff_shape = read_tiff_shape(pair.reference_tif)
     with zipfile.ZipFile(pair.roi_zip) as archive:
@@ -269,6 +514,7 @@ def parse_roi_zip(pair: ManualPair) -> tuple[list[dict], dict]:
         for roi_index, name in enumerate(sorted(roi_names), start=1):
             try:
                 parsed = parse_imagej_roi(archive.read(name))
+                points = parsed.pop("points", [])
                 rows.append(
                     {
                         "pair_id": pair.pair_id,
@@ -276,11 +522,14 @@ def parse_roi_zip(pair: ManualPair) -> tuple[list[dict], dict]:
                         "folder": str(pair.folder),
                         "roi_zip": str(pair.roi_zip),
                         "reference_tif": str(pair.reference_tif) if pair.reference_tif else None,
+                        "results_csv": str(pair.results_csv) if pair.results_csv else None,
+                        "overlay_csv": str(pair.overlay_csv) if pair.overlay_csv else None,
                         "tiff_height": height,
                         "tiff_width": width,
                         "tiff_shape": str(tiff_shape) if tiff_shape is not None else None,
                         "roi_file": name,
                         "roi_index": roi_index,
+                        "points_json": json.dumps(points),
                         **parsed,
                     }
                 )
@@ -292,12 +541,17 @@ def parse_roi_zip(pair: ManualPair) -> tuple[list[dict], dict]:
         "folder": str(pair.folder),
         "roi_zip": str(pair.roi_zip),
         "reference_tif": str(pair.reference_tif) if pair.reference_tif else None,
+        "results_csv": str(pair.results_csv) if pair.results_csv else None,
+        "overlay_csv": str(pair.overlay_csv) if pair.overlay_csv else None,
         "tiff_height": height,
         "tiff_width": width,
         "tiff_shape": str(tiff_shape) if tiff_shape is not None else None,
         "n_roi": len(rows),
     }
-    return rows, pair_row
+    rows, trace_rows = add_trace_features(pair, rows, trace_mode=trace_mode, frame_stride=frame_stride)
+    n_trace_roi = sum(1 for row in rows if int(row.get("trace_n_frames", 0) or 0) > 0)
+    pair_row["n_trace_roi"] = n_trace_roi
+    return rows, pair_row, trace_rows
 
 
 def write_csv(path: Path, rows: list[dict]) -> None:
@@ -352,11 +606,21 @@ def build_prior(rows: list[dict], pair_rows: list[dict], manual_root: Path) -> d
         "circularity": percentile_summary(finite_values(rows, "circularity")),
         "aspect_ratio": percentile_summary(finite_values(rows, "aspect_ratio")),
     }
+    trace_metrics = {
+        "trace_cv": percentile_summary(finite_values(rows, "trace_cv")),
+        "trace_robust_snr": percentile_summary(finite_values(rows, "trace_robust_snr")),
+        "trace_dff_p95": percentile_summary(finite_values(rows, "trace_dff_p95")),
+        "trace_event_fraction_z3": percentile_summary(finite_values(rows, "trace_event_fraction_z3")),
+        "trace_lag1_autocorr": percentile_summary(finite_values(rows, "trace_lag1_autocorr")),
+    }
+    n_trace_roi = int(sum(1 for row in rows if int(row.get("trace_n_frames", 0) or 0) > 0))
     return {
         "manual_root": str(manual_root),
         "n_pairs": len(pair_rows),
         "n_roi": len(rows),
+        "n_trace_roi": n_trace_roi,
         "metrics": metrics,
+        "trace_metrics": trace_metrics,
         "recommended_soft_rules": {
             "area_px_min": metrics["area_px"].get("p05"),
             "area_px_max": metrics["area_px"].get("p95"),
@@ -364,6 +628,14 @@ def build_prior(rows: list[dict], pair_rows: list[dict], manual_root: Path) -> d
             "equiv_diameter_px_max": metrics["equiv_diameter_px"].get("p95"),
             "aspect_ratio_max": metrics["aspect_ratio"].get("p95"),
             "circularity_min": metrics["circularity"].get("p05"),
+        },
+        "recommended_trace_rules": {
+            "trace_dff_p95_min": trace_metrics["trace_dff_p95"].get("p05"),
+            "trace_robust_snr_min": trace_metrics["trace_robust_snr"].get("p05"),
+            "trace_cv_min": trace_metrics["trace_cv"].get("p05"),
+            "trace_cv_max": trace_metrics["trace_cv"].get("p95"),
+            "trace_event_fraction_z3_min": trace_metrics["trace_event_fraction_z3"].get("p05"),
+            "trace_event_fraction_z3_max": trace_metrics["trace_event_fraction_z3"].get("p95"),
         },
     }
 
@@ -373,6 +645,13 @@ def save_summary_csv(path: Path, prior: dict) -> None:
     for metric, summary in prior["metrics"].items():
         row = {"metric": metric, **summary}
         rows.append(row)
+    write_csv(path, rows)
+
+
+def save_trace_summary_csv(path: Path, prior: dict) -> None:
+    rows = []
+    for metric, summary in prior.get("trace_metrics", {}).items():
+        rows.append({"metric": metric, **summary})
     write_csv(path, rows)
 
 
@@ -403,6 +682,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-root", type=Path, help="Output root. Default: DATA_ROOT if set, else MANUAL_ROOT.")
     parser.add_argument("--action", choices=("skip", "overwrite"), default="skip")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--trace-mode",
+        choices=("none", "summary", "full"),
+        default="summary",
+        help="Extract trace features from matching TIFFs. full also writes per-frame traces.",
+    )
+    parser.add_argument(
+        "--trace-frame-stride",
+        type=int,
+        default=1,
+        help="Use every Nth frame when extracting manual ROI traces.",
+    )
     parser.add_argument("--dpi", type=int, default=150)
     parser.add_argument("--verbose", action="store_true")
     return parser
@@ -447,23 +738,32 @@ def main(argv: list[str] | None = None) -> int:
 
     roi_rows: list[dict] = []
     pair_rows: list[dict] = []
+    trace_rows: list[dict] = []
     for pair in pairs:
         try:
-            rows, pair_row = parse_roi_zip(pair)
+            rows, pair_row, pair_trace_rows = parse_roi_zip(
+                pair,
+                trace_mode=args.trace_mode,
+                frame_stride=args.trace_frame_stride,
+            )
             roi_rows.extend(rows)
             pair_rows.append(pair_row)
+            trace_rows.extend(pair_trace_rows)
             summary.processed += 1
-            LOGGER.info("[ok] %s: n_roi=%d", pair.pair_id, len(rows))
+            LOGGER.info("[ok] %s: n_roi=%d, n_trace_roi=%d", pair.pair_id, len(rows), pair_row.get("n_trace_roi", 0))
         except Exception as exc:
             summary.failed += 1
             LOGGER.exception("[failed] %s: %s", pair.pair_id, exc)
 
     write_csv(out_root / "manual_roi_pairs.csv", pair_rows)
     write_csv(out_root / "manual_roi_table.csv", roi_rows)
+    if trace_rows:
+        write_csv(out_root / "manual_roi_traces.csv", trace_rows)
     prior = build_prior(roi_rows, pair_rows, manual_root=manual_root)
     with (out_root / "manual_roi_prior.json").open("w", encoding="utf-8") as handle:
         json.dump(prior, handle, indent=2)
     save_summary_csv(out_root / "manual_roi_shape_summary.csv", prior)
+    save_trace_summary_csv(out_root / "manual_roi_trace_summary.csv", prior)
     save_distribution_plot(
         finite_values(roi_rows, "area_px"),
         out_root / "manual_roi_area_distribution.png",
@@ -478,6 +778,20 @@ def main(argv: list[str] | None = None) -> int:
         xlabel="Equivalent diameter (px)",
         dpi=args.dpi,
     )
+    save_distribution_plot(
+        finite_values(roi_rows, "trace_dff_p95"),
+        out_root / "manual_roi_trace_dff_distribution.png",
+        title="Manual ROI trace dF/F-like amplitude distribution",
+        xlabel="Trace p95-p10 / abs(p10)",
+        dpi=args.dpi,
+    )
+    save_distribution_plot(
+        finite_values(roi_rows, "trace_robust_snr"),
+        out_root / "manual_roi_trace_snr_distribution.png",
+        title="Manual ROI robust trace SNR distribution",
+        xlabel="Robust trace SNR",
+        dpi=args.dpi,
+    )
 
     LOGGER.info("Summary:")
     LOGGER.info("  found: %d", summary.found)
@@ -485,6 +799,7 @@ def main(argv: list[str] | None = None) -> int:
     LOGGER.info("  skipped: %d", summary.skipped)
     LOGGER.info("  failed: %d", summary.failed)
     LOGGER.info("  manual ROI count: %d", len(roi_rows))
+    LOGGER.info("  manual ROI with trace features: %d", prior.get("n_trace_roi", 0))
     return 1 if summary.failed else 0
 
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Filter suite2p ROIs using a manual ROI shape prior.
+Filter suite2p ROIs using a manual ROI shape and trace prior.
 
 Default layout:
   input : DATA_ROOT/05_suite2p_roi_detection/
@@ -54,6 +54,8 @@ class TrialInput:
     stat_path: Path
     ops_path: Path
     iscell_path: Path
+    f_path: Path
+    fneu_path: Path
     metadata_path: Path | None
     stim_events_path: Path | None
     stim_map_path: Path | None
@@ -123,6 +125,8 @@ def discover_trials(input_root: Path) -> list[TrialInput]:
                 stat_path=stat_path,
                 ops_path=plane0_dir / "ops.npy",
                 iscell_path=plane0_dir / "iscell.npy",
+                f_path=plane0_dir / "F.npy",
+                fneu_path=plane0_dir / "Fneu.npy",
                 metadata_path=find_first_existing(input_dir, ("*_metadata.json",)),
                 stim_events_path=find_first_existing(input_dir, ("*_stim_events.csv",)),
                 stim_map_path=find_first_existing(input_dir, ("*_stim_map.csv",)),
@@ -229,6 +233,34 @@ def build_rules(prior: dict, padding_fraction: float) -> dict:
     }
 
 
+def scalar_trace_prior(prior: dict, metric: str, key: str, fallback: float) -> float:
+    try:
+        value = float(prior["trace_metrics"][metric][key])
+        return value if np.isfinite(value) else fallback
+    except Exception:
+        return fallback
+
+
+def build_trace_rules(prior: dict, padding_fraction: float) -> dict:
+    pad = max(0.0, float(padding_fraction))
+    dff_min = scalar_trace_prior(prior, "trace_dff_p95", "p05", np.nan)
+    snr_min = scalar_trace_prior(prior, "trace_robust_snr", "p05", np.nan)
+    cv_min = scalar_trace_prior(prior, "trace_cv", "p05", np.nan)
+    cv_max = scalar_trace_prior(prior, "trace_cv", "p95", np.nan)
+    lag1_min = scalar_trace_prior(prior, "trace_lag1_autocorr", "p05", np.nan)
+    return {
+        "trace_dff_p95_min": dff_min * (1.0 - pad) if np.isfinite(dff_min) else np.nan,
+        "trace_robust_snr_min": snr_min * (1.0 - pad) if np.isfinite(snr_min) else np.nan,
+        "trace_cv_min": cv_min * (1.0 - pad) if np.isfinite(cv_min) else np.nan,
+        "trace_cv_max": cv_max * (1.0 + pad) if np.isfinite(cv_max) else np.nan,
+        "trace_lag1_autocorr_min": lag1_min * (1.0 - pad) if np.isfinite(lag1_min) else np.nan,
+    }
+
+
+def trace_prior_available(prior: dict) -> bool:
+    return int(prior.get("n_trace_roi", 0) or 0) > 0 and bool(prior.get("trace_metrics"))
+
+
 def roi_geometry(roi: dict) -> dict:
     xpix = np.asarray(roi.get("xpix", []), dtype=np.int32)
     ypix = np.asarray(roi.get("ypix", []), dtype=np.int32)
@@ -297,6 +329,81 @@ def score_roi(geom: dict, rules: dict) -> tuple[float, dict]:
     return score, checks
 
 
+def summarize_trace(trace: np.ndarray) -> dict:
+    trace = np.asarray(trace, dtype=float)
+    finite = np.asarray(trace[np.isfinite(trace)], dtype=float)
+    if finite.size == 0:
+        return {
+            "trace_n_frames": 0,
+            "trace_valid_fraction": 0.0,
+            "trace_cv": np.nan,
+            "trace_robust_snr": np.nan,
+            "trace_dff_p95": np.nan,
+            "trace_event_fraction_z3": np.nan,
+            "trace_lag1_autocorr": np.nan,
+        }
+    median = float(np.median(finite))
+    mad = float(np.median(np.abs(finite - median)))
+    robust_sigma = 1.4826 * mad
+    p10 = float(np.percentile(finite, 10))
+    p95 = float(np.percentile(finite, 95))
+    mean = float(np.mean(finite))
+    std = float(np.std(finite))
+    threshold = median + 3.0 * robust_sigma
+    if finite.size > 1 and std > 0:
+        lag1 = float(np.corrcoef(finite[:-1], finite[1:])[0, 1])
+    else:
+        lag1 = np.nan
+    return {
+        "trace_n_frames": int(trace.size),
+        "trace_valid_fraction": float(finite.size / max(trace.size, 1)),
+        "trace_mean": mean,
+        "trace_std": std,
+        "trace_cv": float(std / max(abs(mean), 1e-6)),
+        "trace_p10": p10,
+        "trace_median": median,
+        "trace_p95": p95,
+        "trace_robust_sigma": float(robust_sigma),
+        "trace_robust_snr": float((p95 - median) / max(robust_sigma, 1e-6)),
+        "trace_dff_p95": float((p95 - p10) / max(abs(p10), 1e-6)),
+        "trace_event_fraction_z3": float(np.mean(finite > threshold)) if robust_sigma > 0 else 0.0,
+        "trace_lag1_autocorr": lag1 if np.isfinite(lag1) else np.nan,
+    }
+
+
+def load_corrected_traces(f_path: Path, fneu_path: Path, neuropil_coeff: float) -> np.ndarray | None:
+    if not f_path.exists():
+        return None
+    f = np.load(f_path, allow_pickle=False)
+    if fneu_path.exists():
+        fneu = np.load(fneu_path, allow_pickle=False)
+        if fneu.shape == f.shape:
+            return np.asarray(f - float(neuropil_coeff) * fneu, dtype=float)
+    return np.asarray(f, dtype=float)
+
+
+def score_trace(trace_features: dict, rules: dict) -> tuple[float, dict]:
+    checks: dict[str, bool | None] = {}
+    dff_min = rules.get("trace_dff_p95_min", np.nan)
+    snr_min = rules.get("trace_robust_snr_min", np.nan)
+    cv_min = rules.get("trace_cv_min", np.nan)
+    cv_max = rules.get("trace_cv_max", np.nan)
+    lag1_min = rules.get("trace_lag1_autocorr_min", np.nan)
+
+    value = float(trace_features.get("trace_dff_p95", np.nan))
+    checks["trace_dff_ok"] = bool(value >= dff_min) if np.isfinite(value) and np.isfinite(dff_min) else None
+    value = float(trace_features.get("trace_robust_snr", np.nan))
+    checks["trace_snr_ok"] = bool(value >= snr_min) if np.isfinite(value) and np.isfinite(snr_min) else None
+    value = float(trace_features.get("trace_cv", np.nan))
+    checks["trace_cv_ok"] = bool(cv_min <= value <= cv_max) if np.isfinite(value) and np.isfinite(cv_min) and np.isfinite(cv_max) else None
+    value = float(trace_features.get("trace_lag1_autocorr", np.nan))
+    checks["trace_lag1_ok"] = bool(value >= lag1_min) if np.isfinite(value) and np.isfinite(lag1_min) else None
+
+    valid_checks = [bool(v) for v in checks.values() if v is not None]
+    score = float(np.mean(valid_checks)) if valid_checks else np.nan
+    return score, checks
+
+
 def quality_label(score: float, accepted: bool) -> str:
     if accepted:
         return "accepted"
@@ -309,16 +416,32 @@ def build_quality_table(
     stat: np.ndarray,
     iscell_flag: np.ndarray,
     iscell_prob: np.ndarray,
+    traces: np.ndarray | None,
     rules: dict,
+    trace_rules: dict,
     min_score: float,
     require_suite2p_iscell: bool,
     trial_id: str,
+    trace_prior_mode: str,
+    trace_weight: float,
 ) -> tuple[list[dict], np.ndarray]:
     rows = []
     accepted = np.zeros(len(stat), dtype=bool)
+    use_trace = trace_prior_mode in {"trace-report", "shape-and-trace"} and traces is not None and traces.shape[0] == len(stat)
+    weight = min(max(float(trace_weight), 0.0), 1.0)
     for idx, roi in enumerate(stat):
         geom = roi_geometry(roi if isinstance(roi, dict) else {})
-        score, checks = score_roi(geom, rules)
+        shape_score, shape_checks = score_roi(geom, rules)
+        trace_features: dict = {}
+        trace_score = np.nan
+        trace_checks: dict[str, bool | None] = {}
+        if use_trace:
+            trace_features = summarize_trace(traces[idx])
+            trace_score, trace_checks = score_trace(trace_features, trace_rules)
+        if trace_prior_mode == "shape-and-trace" and np.isfinite(trace_score):
+            score = float((1.0 - weight) * shape_score + weight * trace_score)
+        else:
+            score = shape_score
         pass_shape = score >= min_score
         pass_suite2p = bool(iscell_flag[idx]) if require_suite2p_iscell else True
         is_accepted = bool(pass_shape and pass_suite2p)
@@ -330,10 +453,15 @@ def build_quality_table(
                 "suite2p_iscell": int(bool(iscell_flag[idx])),
                 "suite2p_iscell_prob": float(iscell_prob[idx]) if np.isfinite(iscell_prob[idx]) else np.nan,
                 "manual_prior_score": score,
+                "shape_prior_score": shape_score,
+                "trace_prior_score": float(trace_score) if np.isfinite(trace_score) else np.nan,
+                "trace_prior_used": int(bool(use_trace and np.isfinite(trace_score))),
                 "accepted": int(is_accepted),
                 "quality_label": quality_label(score, is_accepted),
                 **geom,
-                **{key: int(bool(value)) for key, value in checks.items()},
+                **trace_features,
+                **{key: int(bool(value)) for key, value in shape_checks.items()},
+                **{key: (int(bool(value)) if value is not None else np.nan) for key, value in trace_checks.items()},
             }
         )
     return rows, accepted
@@ -345,6 +473,18 @@ def curated_iscell_array(accepted: np.ndarray, quality_rows: list[dict]) -> np.n
     out[:, 0] = accepted.astype(np.float32)
     out[:, 1] = scores
     return out
+
+
+def mean_numeric(rows: list[dict], key: str) -> float:
+    values = []
+    for row in rows:
+        try:
+            value = float(row.get(key, np.nan))
+        except Exception:
+            value = np.nan
+        if np.isfinite(value):
+            values.append(value)
+    return float(np.mean(values)) if values else np.nan
 
 
 def write_csv(path: Path, rows: list[dict]) -> None:
@@ -427,14 +567,22 @@ def process_trial(
     ops = load_ops(trial.ops_path)
     iscell_flag, iscell_prob = load_iscell(trial.iscell_path, len(stat))
     rules = build_rules(prior, padding_fraction=args.rule_padding_fraction)
+    trace_rules = build_trace_rules(prior, padding_fraction=args.rule_padding_fraction)
+    traces = None
+    if args.trace_prior_mode in {"trace-report", "shape-and-trace"} and trace_prior_available(prior):
+        traces = load_corrected_traces(trial.f_path, trial.fneu_path, neuropil_coeff=args.neuropil_coeff)
     rows, accepted = build_quality_table(
         stat=stat,
         iscell_flag=iscell_flag,
         iscell_prob=iscell_prob,
+        traces=traces,
         rules=rules,
+        trace_rules=trace_rules,
         min_score=args.min_quality_score,
         require_suite2p_iscell=args.require_suite2p_iscell,
         trial_id=trial.trial_id,
+        trace_prior_mode=args.trace_prior_mode,
+        trace_weight=args.trace_weight,
     )
 
     accepted_indices = np.flatnonzero(accepted)
@@ -468,10 +616,19 @@ def process_trial(
         "n_rejected_suite2p_iscell": rejected_suite2p_cell,
         "accepted_fraction": float(len(accepted_indices) / max(len(stat), 1)),
         "min_quality_score": float(args.min_quality_score),
+        "mean_shape_prior_score": mean_numeric(rows, "shape_prior_score"),
+        "mean_trace_prior_score": mean_numeric(rows, "trace_prior_score"),
+        "mean_manual_prior_score": mean_numeric(rows, "manual_prior_score"),
+        "trace_prior_mode": args.trace_prior_mode,
+        "trace_prior_available": bool(trace_prior_available(prior)),
+        "trace_prior_used": bool(traces is not None),
+        "trace_weight": float(args.trace_weight),
+        "neuropil_coeff": float(args.neuropil_coeff),
         "require_suite2p_iscell": bool(args.require_suite2p_iscell),
         "rule_padding_fraction": float(args.rule_padding_fraction),
         "manual_prior_path": str(args.prior_path),
         "rules": rules,
+        "trace_rules": trace_rules,
     }
     with (out_dir / f"{trial.trial_id}_roi_quality_summary.json").open("w", encoding="utf-8") as handle:
         json.dump(summary, handle, indent=2)
@@ -479,15 +636,23 @@ def process_trial(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Filter suite2p ROIs using a manual ROI shape prior.")
+    parser = argparse.ArgumentParser(description="Filter suite2p ROIs using a manual ROI shape and trace prior.")
     parser.add_argument("--data-root", type=Path, required=True)
     parser.add_argument("--input-root", type=Path, help="Step-05 suite2p root. Default: OUTPUT_ROOT/05_suite2p_roi_detection.")
     parser.add_argument("--output-root", type=Path, help="Pipeline output root. Default: DATA_ROOT.")
     parser.add_argument("--prior-path", type=Path, help="manual_roi_prior.json. Default: OUTPUT_ROOT/05b_manual_roi_prior/manual_roi_prior.json.")
     parser.add_argument("--action", choices=("skip", "overwrite"), default="skip")
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--min-quality-score", type=float, default=0.75, help="Minimum fraction of shape checks that must pass.")
+    parser.add_argument("--min-quality-score", type=float, default=0.75, help="Minimum combined quality score required for accepting an ROI.")
     parser.add_argument("--rule-padding-fraction", type=float, default=0.0, help="Expand manual prior p05-p95 ranges by this fraction.")
+    parser.add_argument(
+        "--trace-prior-mode",
+        choices=("shape-only", "trace-report", "shape-and-trace"),
+        default="trace-report",
+        help="Compute trace quality features; shape-and-trace also uses them in the accept/reject score.",
+    )
+    parser.add_argument("--trace-weight", type=float, default=0.3, help="Weight of trace score in the combined manual prior score.")
+    parser.add_argument("--neuropil-coeff", type=float, default=0.7, help="F - coeff * Fneu used for trace quality features.")
     parser.add_argument("--require-suite2p-iscell", action="store_true", help="Require original suite2p iscell==1 in addition to shape prior.")
     parser.add_argument("--overlay-max-rois", type=int, default=2500)
     parser.add_argument("--dpi", type=int, default=150)
