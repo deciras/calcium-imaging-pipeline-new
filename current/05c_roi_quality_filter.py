@@ -38,6 +38,9 @@ STEP_OUTPUT_PATTERNS = (
     "*_roi_quality_summary.json",
     "*_roi_quality_overlay.png",
     "*_roi_quality_overlay.pdf",
+    "*_roi_quality_trace_qc.png",
+    "*_roi_quality_trace_qc.pdf",
+    "*_roi_quality_ranked_candidates.csv",
     "*_metadata.json",
     "*_stim_events.csv",
     "*_stim_map.csv",
@@ -371,11 +374,16 @@ def summarize_trace(trace: np.ndarray) -> dict:
     }
 
 
-def load_corrected_traces(f_path: Path, fneu_path: Path, neuropil_coeff: float) -> np.ndarray | None:
+def load_quality_traces(
+    f_path: Path,
+    fneu_path: Path,
+    neuropil_coeff: float,
+    trace_source: str,
+) -> np.ndarray | None:
     if not f_path.exists():
         return None
     f = np.load(f_path, allow_pickle=False)
-    if fneu_path.exists():
+    if trace_source == "neuropil-corrected" and fneu_path.exists():
         fneu = np.load(fneu_path, allow_pickle=False)
         if fneu.shape == f.shape:
             return np.asarray(f - float(neuropil_coeff) * fneu, dtype=float)
@@ -487,6 +495,29 @@ def mean_numeric(rows: list[dict], key: str) -> float:
     return float(np.mean(values)) if values else np.nan
 
 
+def numeric_values(rows: list[dict], key: str) -> np.ndarray:
+    values = []
+    for row in rows:
+        try:
+            value = float(row.get(key, np.nan))
+        except Exception:
+            value = np.nan
+        values.append(value)
+    return np.asarray(values, dtype=float)
+
+
+def count_pass(rows: list[dict], key: str) -> int:
+    total = 0
+    for row in rows:
+        try:
+            value = float(row.get(key, np.nan))
+        except Exception:
+            value = np.nan
+        if np.isfinite(value) and value > 0:
+            total += 1
+    return total
+
+
 def write_csv(path: Path, rows: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = []
@@ -551,6 +582,118 @@ def save_overlay(
         plt.close(fig)
 
 
+def save_trace_qc_plot(
+    quality_rows: list[dict],
+    output_path: Path,
+    trial_id: str,
+    dpi: int,
+) -> None:
+    shape_score = numeric_values(quality_rows, "shape_prior_score")
+    trace_score = numeric_values(quality_rows, "trace_prior_score")
+    accepted = numeric_values(quality_rows, "accepted") > 0
+    iscell = numeric_values(quality_rows, "suite2p_iscell") > 0
+    valid = np.isfinite(shape_score) & np.isfinite(trace_score)
+    if not np.any(valid):
+        return
+
+    import matplotlib.pyplot as plt
+
+    fig, axes = plt.subplots(2, 2, figsize=(10, 8))
+    ax = axes[0, 0]
+    colors = np.where(accepted[valid], "tab:green", "tab:red")
+    ax.scatter(shape_score[valid], trace_score[valid], s=8, c=colors, alpha=0.45, edgecolors="none")
+    ax.axvline(0.75, color="0.3", lw=1, ls="--", label="shape threshold")
+    ax.set_xlabel("Shape prior score")
+    ax.set_ylabel("Trace prior score")
+    ax.set_title("ROI quality: shape vs trace")
+    ax.set_xlim(-0.05, 1.05)
+    ax.set_ylim(-0.05, 1.05)
+
+    ax = axes[0, 1]
+    bins = np.linspace(0, 1, 11)
+    ax.hist(trace_score[valid & accepted], bins=bins, alpha=0.7, label="accepted", color="tab:green")
+    ax.hist(trace_score[valid & ~accepted], bins=bins, alpha=0.45, label="rejected", color="tab:red")
+    ax.set_xlabel("Trace prior score")
+    ax.set_ylabel("ROI count")
+    ax.set_title("Trace score distribution")
+    ax.legend(frameon=False)
+
+    ax = axes[1, 0]
+    trace_dff = numeric_values(quality_rows, "trace_dff_p95")
+    trace_snr = numeric_values(quality_rows, "trace_robust_snr")
+    valid2 = np.isfinite(trace_dff) & np.isfinite(trace_snr)
+    if np.any(valid2):
+        finite_dff = trace_dff[valid2]
+        finite_snr = trace_snr[valid2]
+        dff_limit = float(np.percentile(finite_dff, 99)) if finite_dff.size else 1.0
+        snr_limit = float(np.percentile(finite_snr, 99)) if finite_snr.size else 1.0
+        colors2 = np.where(accepted[valid2], "tab:green", "tab:red")
+        ax.scatter(finite_dff, finite_snr, s=8, c=colors2, alpha=0.45, edgecolors="none")
+        if np.isfinite(dff_limit) and dff_limit > 0:
+            ax.set_xlim(left=0, right=dff_limit * 1.1)
+        if np.isfinite(snr_limit) and snr_limit > 0:
+            ax.set_ylim(bottom=0, top=snr_limit * 1.1)
+    ax.set_xlabel("Trace dF/F-like amplitude")
+    ax.set_ylabel("Robust trace SNR")
+    ax.set_title("Trace feature space")
+
+    ax = axes[1, 1]
+    labels = ["all", "suite2p cell", "accepted", "trace score >= 0.75"]
+    counts = [
+        len(quality_rows),
+        int(np.sum(iscell)),
+        int(np.sum(accepted)),
+        int(np.sum(valid & (trace_score >= 0.75))),
+    ]
+    ax.bar(labels, counts, color=["0.5", "tab:blue", "tab:green", "tab:purple"])
+    ax.set_ylabel("ROI count")
+    ax.set_title("ROI counts")
+    ax.tick_params(axis="x", rotation=25)
+
+    fig.suptitle(trial_id)
+    plt.tight_layout()
+    try:
+        fig.savefig(output_path, dpi=dpi, bbox_inches="tight")
+        fig.savefig(output_path.with_suffix(".pdf"), bbox_inches="tight")
+    finally:
+        plt.close(fig)
+
+
+def ranked_candidate_rows(quality_rows: list[dict], limit: int) -> list[dict]:
+    def sort_key(row: dict) -> tuple[float, float, float]:
+        return (
+            float(row.get("accepted", 0) or 0),
+            float(row.get("trace_prior_score", -1) or -1),
+            float(row.get("shape_prior_score", -1) or -1),
+        )
+
+    keys = (
+        "trial_id",
+        "suite2p_original_id",
+        "accepted",
+        "suite2p_iscell",
+        "suite2p_iscell_prob",
+        "manual_prior_score",
+        "shape_prior_score",
+        "trace_prior_score",
+        "area_px",
+        "equiv_diameter_px",
+        "circularity",
+        "aspect_ratio",
+        "x_mean",
+        "y_mean",
+        "trace_cv",
+        "trace_robust_snr",
+        "trace_dff_p95",
+        "trace_event_fraction_z3",
+        "trace_lag1_autocorr",
+    )
+    ordered = sorted(quality_rows, key=sort_key, reverse=True)
+    if limit > 0:
+        ordered = ordered[:limit]
+    return [{key: row.get(key, np.nan) for key in keys} for row in ordered]
+
+
 def process_trial(
     trial: TrialInput,
     out_dir: Path,
@@ -570,7 +713,12 @@ def process_trial(
     trace_rules = build_trace_rules(prior, padding_fraction=args.rule_padding_fraction)
     traces = None
     if args.trace_prior_mode in {"trace-report", "shape-and-trace"} and trace_prior_available(prior):
-        traces = load_corrected_traces(trial.f_path, trial.fneu_path, neuropil_coeff=args.neuropil_coeff)
+        traces = load_quality_traces(
+            trial.f_path,
+            trial.fneu_path,
+            neuropil_coeff=args.neuropil_coeff,
+            trace_source=args.trace_source,
+        )
     rows, accepted = build_quality_table(
         stat=stat,
         iscell_flag=iscell_flag,
@@ -588,6 +736,7 @@ def process_trial(
     accepted_indices = np.flatnonzero(accepted)
     rejected_indices = np.flatnonzero(~accepted)
     write_csv(out_dir / f"{trial.trial_id}_roi_quality_table.csv", rows)
+    write_csv(out_dir / f"{trial.trial_id}_roi_quality_ranked_candidates.csv", ranked_candidate_rows(rows, args.rank_limit))
     write_indices(out_dir / f"{trial.trial_id}_accepted_suite2p_indices.csv", trial.trial_id, accepted_indices)
     write_indices(out_dir / f"{trial.trial_id}_rejected_suite2p_indices.csv", trial.trial_id, rejected_indices)
     np.save(out_dir / f"{trial.trial_id}_iscell_curated.npy", curated_iscell_array(accepted, rows))
@@ -599,6 +748,12 @@ def process_trial(
         trial_id=trial.trial_id,
         dpi=args.dpi,
         max_rois=args.overlay_max_rois,
+    )
+    save_trace_qc_plot(
+        quality_rows=rows,
+        output_path=out_dir / f"{trial.trial_id}_roi_quality_trace_qc.png",
+        trial_id=trial.trial_id,
+        dpi=args.dpi,
     )
 
     rescued = int(np.sum(accepted & ~iscell_flag))
@@ -619,9 +774,15 @@ def process_trial(
         "mean_shape_prior_score": mean_numeric(rows, "shape_prior_score"),
         "mean_trace_prior_score": mean_numeric(rows, "trace_prior_score"),
         "mean_manual_prior_score": mean_numeric(rows, "manual_prior_score"),
+        "n_trace_prior_score_ge_075": int(np.sum(numeric_values(rows, "trace_prior_score") >= 0.75)),
+        "n_trace_dff_ok": count_pass(rows, "trace_dff_ok"),
+        "n_trace_snr_ok": count_pass(rows, "trace_snr_ok"),
+        "n_trace_cv_ok": count_pass(rows, "trace_cv_ok"),
+        "n_trace_lag1_ok": count_pass(rows, "trace_lag1_ok"),
         "trace_prior_mode": args.trace_prior_mode,
         "trace_prior_available": bool(trace_prior_available(prior)),
         "trace_prior_used": bool(traces is not None),
+        "trace_source": args.trace_source,
         "trace_weight": float(args.trace_weight),
         "neuropil_coeff": float(args.neuropil_coeff),
         "require_suite2p_iscell": bool(args.require_suite2p_iscell),
@@ -652,9 +813,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Compute trace quality features; shape-and-trace also uses them in the accept/reject score.",
     )
     parser.add_argument("--trace-weight", type=float, default=0.3, help="Weight of trace score in the combined manual prior score.")
+    parser.add_argument(
+        "--trace-source",
+        choices=("raw", "neuropil-corrected"),
+        default="raw",
+        help="Trace source for 05c quality features. raw matches ImageJ manual ROI Results.csv more closely.",
+    )
     parser.add_argument("--neuropil-coeff", type=float, default=0.7, help="F - coeff * Fneu used for trace quality features.")
     parser.add_argument("--require-suite2p-iscell", action="store_true", help="Require original suite2p iscell==1 in addition to shape prior.")
     parser.add_argument("--overlay-max-rois", type=int, default=2500)
+    parser.add_argument("--rank-limit", type=int, default=500, help="Number of top ROI candidates to write in the ranked candidate table.")
     parser.add_argument("--dpi", type=int, default=150)
     parser.add_argument("--verbose", action="store_true")
     return parser

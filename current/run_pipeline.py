@@ -445,6 +445,7 @@ def build_managed_step_args(
     require_suite2p_iscell: bool,
     trace_prior_mode: str | None,
     trace_weight: float | None,
+    trace_source: str | None,
     neuropil_coeff: float | None,
     roi_source: str | None,
     f0_mode: str | None,
@@ -558,6 +559,7 @@ def build_managed_step_args(
             ("--rule-padding-fraction", rule_padding_fraction),
             ("--trace-prior-mode", trace_prior_mode),
             ("--trace-weight", trace_weight),
+            ("--trace-source", trace_source),
             ("--neuropil-coeff", neuropil_coeff),
         )
         for option_name, option_value in roi_filter_options:
@@ -708,6 +710,7 @@ def resolve_steps(
     require_suite2p_iscell: bool,
     trace_prior_mode: str | None,
     trace_weight: float | None,
+    trace_source: str | None,
     neuropil_coeff: float | None,
     roi_source: str | None,
     f0_mode: str | None,
@@ -792,6 +795,7 @@ def resolve_steps(
             require_suite2p_iscell=require_suite2p_iscell,
             trace_prior_mode=trace_prior_mode,
             trace_weight=trace_weight,
+            trace_source=trace_source,
             neuropil_coeff=neuropil_coeff,
             roi_source=roi_source,
             f0_mode=f0_mode,
@@ -1075,6 +1079,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Step 05c: whether trace features are reported only or also used for filtering.",
     )
     parser.add_argument("--trace-weight", type=float, default=None, help="Step 05c: weight of trace score in the combined ROI quality score.")
+    parser.add_argument(
+        "--trace-source",
+        choices=("raw", "neuropil-corrected"),
+        default=None,
+        help="Step 05c: trace source used for ROI trace quality features.",
+    )
     parser.add_argument("--require-suite2p-iscell", action="store_true", help="Step 05c: require suite2p iscell==1 in addition to shape prior.")
     parser.add_argument("--neuropil-coeff", type=float, default=None, help="Steps 05c/06: coefficient for suite2p Fneu subtraction.")
     parser.add_argument(
@@ -1221,6 +1231,7 @@ def main(argv: list[str] | None = None) -> int:
             require_suite2p_iscell=args.require_suite2p_iscell,
             trace_prior_mode=args.trace_prior_mode,
             trace_weight=args.trace_weight,
+            trace_source=args.trace_source,
             neuropil_coeff=args.neuropil_coeff,
             roi_source=args.roi_source,
             f0_mode=args.f0_mode,

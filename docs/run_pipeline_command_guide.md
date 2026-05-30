@@ -248,9 +248,41 @@ DATA_ROOT/05_suite2p_roi_detection/
 - `benchmark/suite2p/roi_overlay.pdf`
 - `suite2p_trial_summary.json`
 
+## Step 05b：从手画 ROI 建立 prior
+
+05b 会读取历史手画 ROI 文件夹里的 `RoiSet.zip`。如果同一文件夹里有 ImageJ/Fiji 导出的 `Results.csv` 和 `Overlay Elements*.csv`，它还会把手画 ROI 的 trace 特征一起学进去。
+
+推荐运行：
+
+```bash
+cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipeline-new
+
+python3 current/run_pipeline.py \
+  --steps 05b \
+  --data-root /Users/dingyifei/Documents/calcium-imaging-pipeline-new/test_dataset \
+  --manual-root /Users/dingyifei/Documents/calcium-imaging-pipeline-new/20250901 \
+  --action overwrite \
+  --manual-trace-mode summary
+```
+
+说明：
+
+- `--manual-root`：手画 ROI 数据所在文件夹
+- `--manual-trace-mode summary`：只保存 trace 摘要，文件较小，日常推荐
+- `--manual-trace-mode full`：额外保存每个 ROI 的逐帧 trace，文件会更大
+- 05b 不会改动原始手画 ROI 文件夹
+
+主要输出：
+
+- `manual_roi_prior.json`
+- `manual_roi_table.csv`
+- `manual_roi_shape_summary.csv`
+- `manual_roi_trace_summary.csv`
+- shape / trace 分布图 PNG/PDF
+
 ## Step 05c：ROI 质量筛选
 
-05c 会读取 05 的 suite2p ROI，再用 05b 从历史手画 ROI 得到的形状范围做筛选。它不会修改 05 的原始 suite2p 输出，只会生成新的 curated 文件夹。
+05c 会读取 05 的 suite2p ROI，再用 05b 从历史手画 ROI 得到的形状和 trace 信息做质控。它不会修改 05 的原始 suite2p 输出，只会生成新的 curated 文件夹。
 
 安全运行：
 
@@ -258,7 +290,8 @@ DATA_ROOT/05_suite2p_roi_detection/
 python3 current/run_pipeline.py \
   --steps 05c \
   --data-root /Users/dingyifei/Documents/calcium-imaging-pipeline-new/test_dataset \
-  --action skip
+  --action skip \
+  --trace-prior-mode trace-report
 ```
 
 确认要重跑 05c 时：
@@ -267,7 +300,9 @@ python3 current/run_pipeline.py \
 python3 current/run_pipeline.py \
   --steps 05c \
   --data-root /Users/dingyifei/Documents/calcium-imaging-pipeline-new/test_dataset \
-  --action overwrite
+  --action overwrite \
+  --trace-prior-mode trace-report \
+  --trace-source raw
 ```
 
 更保守但可能漏掉真实细胞的运行方式：
@@ -284,6 +319,10 @@ python3 current/run_pipeline.py \
 
 - `--min-quality-score 0.75`：默认要求 4 个形状检查中至少 3 个通过
 - `--rule-padding-fraction 0`：默认不放宽手画 ROI 的 p05-p95 范围
+- `--trace-prior-mode trace-report`：默认推荐；计算 trace 质量，但不直接用 trace 硬过滤
+- `--trace-prior-mode shape-and-trace`：严格模式；形状和 trace 一起决定是否保留，可能漏掉真实细胞，需谨慎
+- `--trace-source raw`：默认用 suite2p 的 `F.npy`，更接近 ImageJ 手画 ROI 的 `Results.csv`
+- `--trace-source neuropil-corrected`：使用 `F - 0.7 * Fneu` 计算 trace 质量
 - `--require-suite2p-iscell`：只保留 suite2p 原本也判为 cell 的 ROI；更保守，但不会救回 suite2p 漏判的 ROI
 
 05c 输出到：
@@ -301,6 +340,9 @@ DATA_ROOT/05c_roi_quality_filter/
 - `<trial>_iscell_curated.npy`
 - `<trial>_roi_quality_overlay.png`
 - `<trial>_roi_quality_overlay.pdf`
+- `<trial>_roi_quality_trace_qc.png`
+- `<trial>_roi_quality_trace_qc.pdf`
+- `<trial>_roi_quality_ranked_candidates.csv`
 - `<trial>_roi_quality_summary.json`
 
 ## Step 06：提取 dF/F
