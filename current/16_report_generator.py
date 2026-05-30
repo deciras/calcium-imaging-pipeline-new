@@ -84,6 +84,16 @@ def table_html(df: pd.DataFrame, max_rows: int = 20) -> str:
     return shown.to_html(index=False, escape=True, classes="data-table")
 
 
+def file_links(paths: list[Path], output_root: Path) -> str:
+    items = []
+    for path in paths:
+        if path.exists():
+            items.append(
+                f'<li><a href="../{html.escape(rel(path, output_root))}">{html.escape(path.name)}</a></li>'
+            )
+    return "<ul>" + "".join(items) + "</ul>" if items else "<p>No exports available.</p>"
+
+
 def load_json(path: Path) -> dict:
     if not path.exists():
         return {}
@@ -178,11 +188,27 @@ def write_trial_report(output_root: Path, report_root: Path, trial_id: str) -> P
 def write_global_report(output_root: Path, report_root: Path, trial_report_paths: list[Path]) -> Path:
     qc = read_csv(output_root / "15_cross_trial_summary" / "cross_trial_qc_summary.csv")
     summary = load_json(output_root / "15_cross_trial_summary" / "cross_trial_summary.json")
+    top_responsive = read_csv(output_root / "15_cross_trial_summary" / "top_responsive_rois.csv")
+    top_event = read_csv(output_root / "15_cross_trial_summary" / "top_event_rois.csv")
+    top_angle = read_csv(output_root / "15_cross_trial_summary" / "top_angle_selective_rois.csv")
     links = "".join(f'<li><a href="{html.escape(path.name)}">{html.escape(path.stem.replace("_report", ""))}</a></li>' for path in trial_report_paths)
     figures = [
         image_tag(output_root / "15_cross_trial_summary" / "cross_trial_roi_count.png", output_root, "ROI count by trial"),
         image_tag(output_root / "15_cross_trial_summary" / "cross_trial_responsive_fraction.png", output_root, "Responsive fraction by trial"),
         image_tag(output_root / "15_cross_trial_summary" / "cross_trial_angle_selective_fraction.png", output_root, "Angle selective fraction by trial"),
+    ]
+    export_root = output_root / "15_cross_trial_summary"
+    exports = [
+        export_root / "cross_trial_qc_summary.csv",
+        export_root / "all_trials_roi_features.csv",
+        export_root / "all_trials_event_table.csv",
+        export_root / "all_trials_stim_response_table.csv",
+        export_root / "all_trials_angle_response_table.csv",
+        export_root / "all_trials_cluster_labels.csv",
+        export_root / "all_trials_pca_embedding.csv",
+        export_root / "top_responsive_rois.csv",
+        export_root / "top_event_rois.csv",
+        export_root / "top_angle_selective_rois.csv",
     ]
     summary_table = pd.DataFrame([summary]) if summary else pd.DataFrame()
     out_path = report_root / "global_report.html"
@@ -193,6 +219,10 @@ def write_global_report(output_root: Path, report_root: Path, trial_report_paths
 <section class="panel"><h2>Global Summary</h2>{table_html(summary_table, 5)}</section>
 <section class="panel"><h2>Trial Reports</h2><ul>{links}</ul></section>
 <section class="panel"><h2>Cross-Trial QC</h2>{table_html(qc, 50)}</section>
+<section class="panel"><h2>Top Responsive ROI Preview</h2>{table_html(top_responsive, 20)}</section>
+<section class="panel"><h2>Top Event ROI Preview</h2>{table_html(top_event, 20)}</section>
+<section class="panel"><h2>Top Angle ROI Preview</h2>{table_html(top_angle, 20)}</section>
+<section class="panel"><h2>Exported Tables</h2>{file_links(exports, output_root)}</section>
 <section class="panel"><h2>Figures</h2><div class="grid">{''.join(fig for fig in figures if fig)}</div></section>
 </main></body></html>
 """

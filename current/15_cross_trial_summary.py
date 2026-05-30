@@ -18,10 +18,20 @@ LOGGER = logging.getLogger("cross_trial_summary")
 STEP_NAME = "15_cross_trial_summary"
 STEP_OUTPUT_PATTERNS = (
     "all_trials_roi_summary.csv",
+    "all_trials_roi_features.csv",
     "all_trials_event_summary.csv",
+    "all_trials_event_table.csv",
     "all_trials_stim_response_summary.csv",
+    "all_trials_stim_response_table.csv",
     "all_trials_angle_tuning_summary.csv",
+    "all_trials_angle_response_table.csv",
     "all_trials_cluster_summary.csv",
+    "all_trials_cluster_labels.csv",
+    "all_trials_embedding_summary.csv",
+    "all_trials_pca_embedding.csv",
+    "top_responsive_rois.csv",
+    "top_event_rois.csv",
+    "top_angle_selective_rois.csv",
     "cross_trial_qc_summary.csv",
     "cross_trial_summary.json",
     "cross_trial_roi_count.png",
@@ -101,6 +111,12 @@ def build_qc_table(output_root: Path) -> tuple[pd.DataFrame, dict[str, pd.DataFr
     tables["clusters"] = read_csv(output_root / "12_hierarchical_clustering" / "hierarchical_clustering_summary.csv")
     tables["leiden"] = read_csv(output_root / "13_leiden" / "leiden_summary.csv")
     tables["embedding"] = read_csv(output_root / "14_dimensionality_reduction" / "embedding_summary.csv")
+    tables["roi_features"] = collect_trial_tables(output_root / "10_population_features", "*_roi_feature_matrix.csv")
+    tables["event_table"] = collect_trial_tables(output_root / "07_events", "*_event_table.csv")
+    tables["stim_response_table"] = collect_trial_tables(output_root / "08_stim_response", "*_stim_response_table.csv")
+    tables["angle_response_table"] = collect_trial_tables(output_root / "09_angle_tuning", "*_angle_response_table.csv")
+    tables["cluster_labels"] = collect_trial_tables(output_root / "12_hierarchical_clustering", "*_hierarchical_cluster_labels.csv")
+    tables["pca_embedding"] = collect_trial_tables(output_root / "14_dimensionality_reduction", "*_pca_embedding.csv")
 
     trial_ids = sorted(set().union(*(set(df["trial_id"].dropna().astype(str)) for df in tables.values() if "trial_id" in df.columns)))
     qc_rows = []
@@ -155,6 +171,43 @@ def save_bar(table: pd.DataFrame, y: str, out_path: Path, title: str, ylabel: st
         plt.close(fig)
 
 
+def write_top_roi_tables(tables: dict[str, pd.DataFrame], out_root: Path, top_n: int) -> None:
+    roi_features = tables.get("roi_features", pd.DataFrame())
+    stim = tables.get("stim_response_table", pd.DataFrame())
+    angle = tables.get("angle_response_table", pd.DataFrame())
+
+    if not stim.empty and "zscore_response" in stim.columns:
+        top_responsive = (
+            stim.sort_values("zscore_response", ascending=False)
+            .groupby("trial_id", as_index=False)
+            .head(top_n)
+        )
+        top_responsive.to_csv(out_root / "top_responsive_rois.csv", index=False)
+    else:
+        pd.DataFrame().to_csv(out_root / "top_responsive_rois.csv", index=False)
+
+    if not roi_features.empty and "event_rate_hz" in roi_features.columns:
+        top_event = (
+            roi_features.sort_values("event_rate_hz", ascending=False)
+            .groupby("trial_id", as_index=False)
+            .head(top_n)
+        )
+        top_event.to_csv(out_root / "top_event_rois.csv", index=False)
+    else:
+        pd.DataFrame().to_csv(out_root / "top_event_rois.csv", index=False)
+
+    if not angle.empty and "reliability" in angle.columns:
+        sort_cols = [col for col in ("reliability", "mean_response") if col in angle.columns]
+        top_angle = (
+            angle.sort_values(sort_cols, ascending=False)
+            .groupby("trial_id", as_index=False)
+            .head(top_n)
+        )
+        top_angle.to_csv(out_root / "top_angle_selective_rois.csv", index=False)
+    else:
+        pd.DataFrame().to_csv(out_root / "top_angle_selective_rois.csv", index=False)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Create cross-trial summaries.")
     parser.add_argument("--data-root", type=Path, required=True)
@@ -162,6 +215,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--action", choices=("skip", "overwrite"), default="skip")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--dpi", type=int, default=150)
+    parser.add_argument("--top-n-roi", type=int, default=20)
     parser.add_argument("--verbose", action="store_true")
     return parser
 
@@ -185,11 +239,19 @@ def main(argv: list[str] | None = None) -> int:
 
     qc, tables = build_qc_table(output_root)
     tables["dff"].to_csv(out_root / "all_trials_roi_summary.csv", index=False)
+    tables["roi_features"].to_csv(out_root / "all_trials_roi_features.csv", index=False)
     tables["events"].to_csv(out_root / "all_trials_event_summary.csv", index=False)
+    tables["event_table"].to_csv(out_root / "all_trials_event_table.csv", index=False)
     tables["stim"].to_csv(out_root / "all_trials_stim_response_summary.csv", index=False)
+    tables["stim_response_table"].to_csv(out_root / "all_trials_stim_response_table.csv", index=False)
     tables["angle"].to_csv(out_root / "all_trials_angle_tuning_summary.csv", index=False)
+    tables["angle_response_table"].to_csv(out_root / "all_trials_angle_response_table.csv", index=False)
     tables["clusters"].to_csv(out_root / "all_trials_cluster_summary.csv", index=False)
+    tables["cluster_labels"].to_csv(out_root / "all_trials_cluster_labels.csv", index=False)
+    tables["embedding"].to_csv(out_root / "all_trials_embedding_summary.csv", index=False)
+    tables["pca_embedding"].to_csv(out_root / "all_trials_pca_embedding.csv", index=False)
     qc.to_csv(out_root / "cross_trial_qc_summary.csv", index=False)
+    write_top_roi_tables(tables, out_root, top_n=args.top_n_roi)
 
     save_bar(qc, "n_roi", out_root / "cross_trial_roi_count.png", "ROI count by trial", "ROI count", args.dpi)
     save_bar(qc, "fraction_responsive", out_root / "cross_trial_responsive_fraction.png", "Responsive fraction by trial", "fraction", args.dpi)
@@ -200,6 +262,10 @@ def main(argv: list[str] | None = None) -> int:
         "n_trials": int(len(qc)),
         "n_roi_total": int(pd.to_numeric(qc.get("n_roi", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()),
         "n_trials_with_stim": int((pd.to_numeric(qc.get("n_stim_events", pd.Series(dtype=float)), errors="coerce").fillna(0) > 0).sum()),
+        "n_event_rows": int(len(tables["event_table"])),
+        "n_stim_response_rows": int(len(tables["stim_response_table"])),
+        "n_angle_response_rows": int(len(tables["angle_response_table"])),
+        "top_n_roi": int(args.top_n_roi),
         "output_root": str(out_root),
     }
     (out_root / "cross_trial_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")

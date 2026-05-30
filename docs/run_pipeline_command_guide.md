@@ -580,6 +580,13 @@ python3 current/run_pipeline.py \
 - `cross_trial_qc_summary.csv`
 - `cross_trial_summary.json`
 - cross-trial QC PNG/PDF
+- `all_trials_roi_features.csv`
+- `all_trials_event_table.csv`
+- `all_trials_stim_response_table.csv`
+- `all_trials_angle_response_table.csv`
+- `top_responsive_rois.csv`
+- `top_event_rois.csv`
+- `top_angle_selective_rois.csv`
 
 ## Step 16：HTML report
 
@@ -596,6 +603,14 @@ python3 current/run_pipeline.py \
 
 - `DATA_ROOT/16_reports/global_report.html`
 - `DATA_ROOT/16_reports/<trial>_report.html`
+
+`global_report.html` 里包含：
+
+- cross-trial QC 表
+- top responsive ROI 预览
+- top event ROI 预览
+- top angle ROI 预览
+- 15 导出的 CSV 表链接
 
 ## 连续运行多个步骤
 
