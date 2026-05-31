@@ -203,6 +203,8 @@ def suite2p_roi_boundary(ypix: np.ndarray, xpix: np.ndarray) -> tuple[np.ndarray
 
 class VideoCanvas(QLabel):
     clicked = Signal(float, float, object)
+    dragged = Signal(float, float, object)
+    released = Signal(float, float, object)
 
     def __init__(self) -> None:
         super().__init__()
@@ -213,14 +215,35 @@ class VideoCanvas(QLabel):
         self._pixmap_rect = QRect()
 
     def mousePressEvent(self, event) -> None:  # type: ignore[override]
-        if self._pixmap_rect.width() <= 0 or self._pixmap_rect.height() <= 0:
+        mapped = self.map_event_to_image(event)
+        if mapped is None:
             return
+        x, y = mapped
+        self.clicked.emit(float(x), float(y), event.button())
+
+    def mouseMoveEvent(self, event) -> None:  # type: ignore[override]
+        mapped = self.map_event_to_image(event)
+        if mapped is None:
+            return
+        x, y = mapped
+        self.dragged.emit(float(x), float(y), event.buttons())
+
+    def mouseReleaseEvent(self, event) -> None:  # type: ignore[override]
+        mapped = self.map_event_to_image(event)
+        if mapped is None:
+            return
+        x, y = mapped
+        self.released.emit(float(x), float(y), event.button())
+
+    def map_event_to_image(self, event) -> tuple[float, float] | None:
+        if self._pixmap_rect.width() <= 0 or self._pixmap_rect.height() <= 0:
+            return None
         point = event.position().toPoint()
         if not self._pixmap_rect.contains(point):
-            return
+            return None
         x = (point.x() - self._pixmap_rect.left()) / self._pixmap_rect.width() * self._image_shape[1]
         y = (point.y() - self._pixmap_rect.top()) / self._pixmap_rect.height() * self._image_shape[0]
-        self.clicked.emit(float(x), float(y), event.button())
+        return float(x), float(y)
 
     def set_rendered_pixmap(self, pixmap: QPixmap, image_shape: tuple[int, int]) -> None:
         self._image_shape = image_shape
@@ -286,6 +309,7 @@ class CurationWindow(QMainWindow):
         self.deleted_existing: set[int] = set()
         self.added_rois: list[dict] = []
         self.current_polygon: list[tuple[float, float]] = []
+        self.freehand_drawing = False
         self.undo_stack: list[dict] = []
         self.low_pct = 1.0
         self.high_pct = 99.0
@@ -295,6 +319,8 @@ class CurationWindow(QMainWindow):
         self.right_canvas = VideoCanvas()
         self.left_canvas.clicked.connect(self.handle_overlay_click)
         self.right_canvas.clicked.connect(self.handle_right_click)
+        self.right_canvas.dragged.connect(self.handle_right_drag)
+        self.right_canvas.released.connect(self.handle_right_release)
 
         self.frame_slider = QSlider(Qt.Orientation.Horizontal)
         self.frame_slider.setMinimum(0)
@@ -314,7 +340,7 @@ class CurationWindow(QMainWindow):
         self.show_rejected.stateChanged.connect(lambda _: self.rebuild_and_refresh())
 
         self.mode_combo = QComboBox()
-        self.mode_combo.addItems(["select existing ROI", "draw polygon ROI"])
+        self.mode_combo.addItems(["select existing ROI", "draw polygon ROI", "draw freehand ROI"])
         self.mode_combo.currentIndexChanged.connect(lambda _: self.refresh())
 
         keep_btn = QPushButton("Keep selected")
@@ -327,7 +353,7 @@ class CurationWindow(QMainWindow):
         undo_action_btn.clicked.connect(self.undo_last_action)
         undo_btn = QPushButton("Undo polygon point")
         undo_btn.clicked.connect(self.undo_polygon_point)
-        finish_btn = QPushButton("Finish polygon ROI")
+        finish_btn = QPushButton("Finish drawn ROI")
         finish_btn.clicked.connect(self.finish_polygon_roi)
         clear_btn = QPushButton("Clear polygon")
         clear_btn.clicked.connect(self.clear_polygon)
@@ -507,7 +533,17 @@ class CurationWindow(QMainWindow):
         return None
 
     def handle_right_click(self, x: float, y: float, button: int) -> None:
-        if self.mode_combo.currentText() != "draw polygon ROI":
+        mode = self.mode_combo.currentText()
+        if mode == "draw freehand ROI":
+            if button == Qt.MouseButton.LeftButton:
+                self.current_polygon = [(float(x), float(y))]
+                self.freehand_drawing = True
+                self.status.showMessage("Freehand ROI started")
+                self.refresh()
+            elif button == Qt.MouseButton.RightButton:
+                self.undo_polygon_point()
+            return
+        if mode != "draw polygon ROI":
             if button == Qt.MouseButton.LeftButton:
                 manual_idx = self.manual_roi_at(x, y)
                 if manual_idx is not None:
@@ -523,6 +559,33 @@ class CurationWindow(QMainWindow):
         self.status.showMessage(f"Polygon point {len(self.current_polygon)}: x={x:.1f}, y={y:.1f}")
         self.refresh()
 
+    def handle_right_drag(self, x: float, y: float, buttons: object) -> None:
+        if self.mode_combo.currentText() != "draw freehand ROI":
+            return
+        if not self.freehand_drawing or not (buttons & Qt.MouseButton.LeftButton):
+            return
+        point = (float(x), float(y))
+        if self.current_polygon:
+            px, py = self.current_polygon[-1]
+            if (px - point[0]) ** 2 + (py - point[1]) ** 2 < 1.5**2:
+                return
+        self.current_polygon.append(point)
+        self.refresh()
+
+    def handle_right_release(self, x: float, y: float, button: object) -> None:
+        if self.mode_combo.currentText() != "draw freehand ROI":
+            return
+        if button != Qt.MouseButton.LeftButton or not self.freehand_drawing:
+            return
+        self.freehand_drawing = False
+        if self.current_polygon:
+            self.current_polygon.append((float(x), float(y)))
+        if len(self.current_polygon) >= 3:
+            self.finish_polygon_roi()
+        else:
+            self.current_polygon = []
+            self.refresh()
+
     def undo_polygon_point(self) -> None:
         if self.current_polygon:
             self.current_polygon.pop()
@@ -532,6 +595,7 @@ class CurationWindow(QMainWindow):
         if self.current_polygon:
             self.push_undo("clear-polygon")
         self.current_polygon = []
+        self.freehand_drawing = False
         self.refresh()
 
     def finish_polygon_roi(self) -> None:
@@ -564,7 +628,7 @@ class CurationWindow(QMainWindow):
         dff, f0 = robust_dff(fcorr, self.f0_percentile, self.f0_eps)
         return {
             "manual_roi_id": len(self.added_rois) + 1,
-            "roi_type": "polygon",
+            "roi_type": "freehand" if self.mode_combo.currentText() == "draw freehand ROI" else "polygon",
             "status": "accepted",
             "points": [[float(x), float(y)] for x, y in self.current_polygon],
             "frame_added": int(self.frame_index),
@@ -668,8 +732,9 @@ class CurationWindow(QMainWindow):
     def update_trace_plot(self) -> None:
         if self.selected_manual_roi is not None and 0 <= self.selected_manual_roi < len(self.added_rois):
             roi = self.added_rois[self.selected_manual_roi]
+            roi_type = roi.get("roi_type", "manual")
             self.trace_canvas.plot_traces(
-                f"Manual polygon ROI {roi['manual_roi_id']}",
+                f"Manual {roi_type} ROI {roi['manual_roi_id']}",
                 np.asarray(roi["_trace_F"], dtype=float),
                 np.asarray(roi["_trace_Fneu"], dtype=float),
                 np.asarray(roi["_trace_F_corrected"], dtype=float),
@@ -788,7 +853,7 @@ class CurationWindow(QMainWindow):
         if key == Qt.Key.Key_Escape:
             self.undo_polygon_point()
             return
-        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and self.mode_combo.currentText() == "draw polygon ROI":
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and self.mode_combo.currentText() in {"draw polygon ROI", "draw freehand ROI"}:
             self.finish_polygon_roi()
             return
         super().keyPressEvent(event)

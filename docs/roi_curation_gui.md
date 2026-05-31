@@ -4,6 +4,8 @@
 
 当前推荐主线是：05 跑 suite2p，05e 人工校对，之后 06 读取人工结果。05b/05c 那套“学习历史手画 ROI 再自动筛选”的路线保留为可选实验功能，不再作为主线。
 
+如果 suite2p 的 ROI 质量长期不稳定，05e 也可以发展成主力手动标注工具。这样 suite2p 只负责可选预标注，甚至可以完全跳过。
+
 ## 打开方式
 
 ```bash
@@ -21,7 +23,8 @@ Linux 工作站上也用同一套命令。只需要把 `--data-root` 改成 Linu
 ## 窗口怎么看
 
 - 左边窗口：视频加 suite2p ROI 的原始形状。点一个 ROI，就会选中它。
-- 右边窗口：干净视频。切到 `draw polygon ROI` 后，可以在这里手动画新 ROI。
+- 右边窗口：干净视频。切到 `draw polygon ROI` 后，可以在这里点选多边形 ROI。
+- 右边窗口：切到 `draw freehand ROI` 后，可以按住鼠标或数位板笔直接圈画 ROI。
 - 下方滑条：拖动时间帧。
 - 右侧列表：已有 suite2p ROI 列表。
 - Trace 图：显示当前选中 ROI 的 `F`、`Fneu`、`F - 0.7Fneu` 和 dF/F。
@@ -52,13 +55,22 @@ Linux 工作站上也用同一套命令。只需要把 `--data-root` 改成 Linu
 
 ## 怎么手动画新 ROI
 
+自由手绘：
+
+1. 把 `right image mode` 切成 `draw freehand ROI`。
+2. 在右边视频上按住鼠标或数位板笔，沿着细胞边缘圈一圈。
+3. 松开后自动生成 ROI。
+4. Trace 图会立刻显示这个手画 ROI 的信号。
+
+点选多边形：
+
 1. 把 `right image mode` 切成 `draw polygon ROI`。
 2. 在右边视频上沿着细胞边界连续点几个点。
 3. 点错可以按 `Undo polygon point`。
 4. 画完点 `Finish polygon ROI`。
 5. Trace 图会立刻显示这个手画 ROI 的信号。
 
-手画 ROI 是多边形，不是圆形。新 ROI 的 neuropil 先用 ROI 周围一圈像素近似估计，所以可以马上看 `F - 0.7Fneu` 和 dF/F。
+手画 ROI 是多边形或 freehand 轨迹，不是圆形。新 ROI 的 neuropil 先用 ROI 周围一圈像素近似估计，所以可以马上看 `F - 0.7Fneu` 和 dF/F。
 
 ## 保存了什么
 

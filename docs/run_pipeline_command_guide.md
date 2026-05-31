@@ -416,6 +416,7 @@ Linux 工作站也是同样格式，只需要把 `--data-root` 改成工作站�
 
 - 左边：视频加 suite2p ROI 原始形状；点 ROI 可以选中它
 - 右边：干净视频；切到 `draw polygon ROI` 后，连续点几下画多边形
+- 右边：切到 `draw freehand ROI` 后，可以按住鼠标或数位板笔直接圈画，松开后自动生成 ROI
 - `Finish polygon ROI`：闭合并加入一个手画 ROI
 - `Keep selected` / `Reject selected`：保留或标记不用当前 ROI
 - `Delete selected`：从人工校对输出里删除当前 ROI
@@ -429,7 +430,7 @@ Linux 工作站也是同样格式，只需要把 `--data-root` 改成工作站�
 - `K`：keep 当前 ROI
 - `Ctrl+Z` 或 `U`：撤销上一步 keep/reject/delete/add
 - `Esc`：撤销当前多边形的最后一个点
-- `Enter`：完成当前多边形 ROI
+- `Enter`：完成当前多边形 ROI；freehand 模式通常松开鼠标/笔就会自动完成
 
 05e 输出到：
 
@@ -450,10 +451,12 @@ DATA_ROOT/05e_roi_manual_curation/<trial>/
 注意：
 
 - 手动画的新 ROI 现在是多边形，不是圆形
+- 也可以用 freehand 模式直接手绘 ROI，适合数位板
 - suite2p ROI 显示为原本的像素边界，不再简化成圆圈
 - `reject` 表示保留记录但后续不用；`delete` 表示从人工校对输出中移除
 - 手画 ROI 的 neuropil 是用 ROI 周围一圈像素近似估计的，适合人工判断 trace 是否像细胞
 - 这一版 05e 先负责“校对和保存”，还没有自动接入 06；后续可以让 06 优先读取 05e 的人工校对结果
+- 05e 可以逐步发展成主力手动 ROI 标注工具；suite2p 可以只作为可选预标注
 
 ## Step 06：提取 dF/F
 
