@@ -414,10 +414,11 @@ Linux 工作站也是同样格式，只需要把 `--data-root` 改成工作站�
 
 窗口里：
 
-- 左边：视频加 suite2p ROI 原始形状；点 ROI 可以选中它
-- 右边：干净视频；切到 `draw polygon ROI` 后，连续点几下画多边形
+- 左边：默认只显示视频，不显示 suite2p ROI
+- `show suite2p refs`：需要参考 suite2p 时再打开；打开时才读取 suite2p ROI，未选中的参考 ROI 是灰蓝色，选中的参考 ROI 是绿色
+- 左边点 suite2p ROI：加入/移出最终人工 ROI set
 - 右边：切到 `draw freehand ROI` 后，可以按住鼠标或数位板笔直接圈画，松开后自动生成 ROI
-- `Finish polygon ROI`：闭合并加入一个手画 ROI
+- 右边：切到 `draw ellipse ROI` 后，可以拖出一个椭圆 ROI
 - `Keep selected` / `Reject selected`：保留或标记不用当前 ROI
 - `Delete selected`：从人工校对输出里删除当前 ROI
 - Trace 面板：显示当前 ROI 的 `F`、`Fneu`、`F - 0.7Fneu` 和 dF/F
@@ -429,8 +430,9 @@ Linux 工作站也是同样格式，只需要把 `--data-root` 改成工作站�
 - `X`：reject 当前 ROI
 - `K`：keep 当前 ROI
 - `Ctrl+Z` 或 `U`：撤销上一步 keep/reject/delete/add
-- `Esc`：撤销当前多边形的最后一个点
-- `Enter`：完成当前多边形 ROI；freehand 模式通常松开鼠标/笔就会自动完成
+- `S`：显示/隐藏 suite2p 参考层
+- `Esc`：撤销当前手绘线最后一段
+- `Enter`：完成当前手绘/椭圆 ROI；freehand 模式通常松开鼠标/笔就会自动完成
 
 05e 输出到：
 
@@ -440,9 +442,9 @@ DATA_ROOT/05e_roi_manual_curation/<trial>/
 
 主要输出：
 
+- `<trial>_manual_roi_set.json`
 - `<trial>_iscell_manual.npy`
-- `<trial>_kept_suite2p_indices.csv`
-- `<trial>_rejected_suite2p_indices.csv`
+- `<trial>_selected_suite2p_indices.csv`
 - `<trial>_deleted_suite2p_indices.csv`
 - `<trial>_manual_added_rois.json`
 - `<trial>_manual_added_roi_traces.csv`
@@ -450,10 +452,11 @@ DATA_ROOT/05e_roi_manual_curation/<trial>/
 
 注意：
 
-- 手动画的新 ROI 现在是多边形，不是圆形
-- 也可以用 freehand 模式直接手绘 ROI，适合数位板
+- 手动画的新 ROI 现在支持 freehand 和椭圆
+- freehand 模式线条更细，适合数位板
 - suite2p ROI 显示为原本的像素边界，不再简化成圆圈
-- `reject` 表示保留记录但后续不用；`delete` 表示从人工校对输出中移除
+- suite2p ROI 默认不显示，需要时才作为参考层打开；最后只保存被选中的 suite2p ROI
+- `reject` 表示保留记录但后续不用；`delete` 表示从人工 ROI set 中移除
 - 手画 ROI 的 neuropil 是用 ROI 周围一圈像素近似估计的，适合人工判断 trace 是否像细胞
 - 这一版 05e 先负责“校对和保存”，还没有自动接入 06；后续可以让 06 优先读取 05e 的人工校对结果
 - 05e 可以逐步发展成主力手动 ROI 标注工具；suite2p 可以只作为可选预标注

@@ -2,9 +2,9 @@
 
 这个工具用于 suite2p 跑完之后人工检查 ROI。目标是少一点折磨，多一点可控：能看视频、能看 ROI、能手动剔除错的 ROI，也能用多边形补画 suite2p 漏掉的细胞。
 
-当前推荐主线是：05 跑 suite2p，05e 人工校对，之后 06 读取人工结果。05b/05c 那套“学习历史手画 ROI 再自动筛选”的路线保留为可选实验功能，不再作为主线。
+当前推荐主线是：05e 人工标注/校对，之后 06 读取人工结果。suite2p 可以只作为可选参考层，用来“捡”少数可用 ROI；05b/05c 那套“学习历史手画 ROI 再自动筛选”的路线保留为可选实验功能，不再作为主线。
 
-如果 suite2p 的 ROI 质量长期不稳定，05e 也可以发展成主力手动标注工具。这样 suite2p 只负责可选预标注，甚至可以完全跳过。
+如果 suite2p 的 ROI 质量长期不稳定，05e 可以直接作为主力手动标注工具。suite2p 只负责可选预标注，甚至可以完全跳过。
 
 ## 打开方式
 
@@ -22,27 +22,27 @@ Linux 工作站上也用同一套命令。只需要把 `--data-root` 改成 Linu
 
 ## 窗口怎么看
 
-- 左边窗口：视频加 suite2p ROI 的原始形状。点一个 ROI，就会选中它。
-- 右边窗口：干净视频。切到 `draw polygon ROI` 后，可以在这里点选多边形 ROI。
+- 左边窗口：默认只显示视频，不显示 suite2p ROI。
+- `show suite2p refs`：需要参考 suite2p 时再打开；打开时才读取 suite2p ROI。未选中的参考 ROI 是灰蓝色，选中的参考 ROI 是绿色，当前选中的是黄色。
 - 右边窗口：切到 `draw freehand ROI` 后，可以按住鼠标或数位板笔直接圈画 ROI。
+- 右边窗口：切到 `draw ellipse ROI` 后，可以拖出一个椭圆 ROI。
 - 下方滑条：拖动时间帧。
 - 右侧列表：已有 suite2p ROI 列表。
 - Trace 图：显示当前选中 ROI 的 `F`、`Fneu`、`F - 0.7Fneu` 和 dF/F。
 
-## 怎么校对已有 ROI
+## 怎么从 suite2p 里捡 ROI
 
-1. 在左边视频或右侧 ROI 列表里选中一个 ROI。
-2. 看它的位置和 trace。
-3. 像细胞就点 `Keep selected`。
-4. 不像细胞但希望保留一条人工判断记录，就点 `Reject selected`。
-5. 确定不想让它进入后续人工校对结果，就点 `Delete selected`。
+1. 打开 `show suite2p refs`。
+2. 在左边视频里点一个 suite2p ROI。
+3. 这个 ROI 会被加入/移出最终人工 ROI set。
+4. 最后只有被选中的 suite2p ROI 会保存；其他 suite2p ROI 都不会进入后续分析。
 
-这个操作不会改 suite2p 原始文件，只会另存一个人工校对版。
+这个操作不会改 suite2p 原始文件，只会另存一个新的人工 ROI set。
 
-`reject` 和 `delete` 的区别：
+`reject` 和 `delete` 主要用于手动画 ROI：
 
 - `reject`：保留记录，但标记为后续不用。
-- `delete`：从人工校对输出中移除。suite2p 原始文件不会被改写。
+- `delete`：从人工 ROI set 中移除。
 
 常用快捷键：
 
@@ -50,8 +50,9 @@ Linux 工作站上也用同一套命令。只需要把 `--data-root` 改成 Linu
 - `X`：reject 当前 ROI
 - `K`：keep 当前 ROI
 - `Ctrl+Z` 或 `U`：撤销上一步 keep/reject/delete/add
-- `Esc`：撤销当前多边形的最后一个点
-- `Enter`：完成当前多边形 ROI
+- `S`：显示/隐藏 suite2p 参考层
+- `Esc`：撤销当前手绘线最后一段
+- `Enter`：完成当前手绘/椭圆 ROI
 
 ## 怎么手动画新 ROI
 
@@ -62,15 +63,14 @@ Linux 工作站上也用同一套命令。只需要把 `--data-root` 改成 Linu
 3. 松开后自动生成 ROI。
 4. Trace 图会立刻显示这个手画 ROI 的信号。
 
-点选多边形：
+椭圆：
 
-1. 把 `right image mode` 切成 `draw polygon ROI`。
-2. 在右边视频上沿着细胞边界连续点几个点。
-3. 点错可以按 `Undo polygon point`。
-4. 画完点 `Finish polygon ROI`。
-5. Trace 图会立刻显示这个手画 ROI 的信号。
+1. 把 `right image mode` 切成 `draw ellipse ROI`。
+2. 在右边视频上按住并拖出椭圆。
+3. 松开后自动生成 ROI。
+4. Trace 图会立刻显示这个椭圆 ROI 的信号。
 
-手画 ROI 是多边形或 freehand 轨迹，不是圆形。新 ROI 的 neuropil 先用 ROI 周围一圈像素近似估计，所以可以马上看 `F - 0.7Fneu` 和 dF/F。
+手画 ROI 是 freehand 轨迹或椭圆，不是圆形。新 ROI 的 neuropil 先用 ROI 周围一圈像素近似估计，所以可以马上看 `F - 0.7Fneu` 和 dF/F。
 
 ## 保存了什么
 
@@ -82,11 +82,11 @@ DATA_ROOT/05e_roi_manual_curation/<trial>/
 
 主要文件：
 
-- `<trial>_iscell_manual.npy`：已有 suite2p ROI 的人工 keep/reject 结果
-- `<trial>_kept_suite2p_indices.csv`：最终保留的 suite2p ROI 编号
-- `<trial>_rejected_suite2p_indices.csv`：被 reject 但未 delete 的 suite2p ROI 编号
+- `<trial>_manual_roi_set.json`：新的 ROI set，只包含手画 ROI 和被选中的 suite2p 参考 ROI
+- `<trial>_iscell_manual.npy`：被选中的 suite2p 参考 ROI 标记
+- `<trial>_selected_suite2p_indices.csv`：最终被捡出来的 suite2p ROI 编号
 - `<trial>_deleted_suite2p_indices.csv`：从人工校对输出中删除的 suite2p ROI 编号
-- `<trial>_manual_added_rois.json`：手动画的新 ROI 多边形坐标
+- `<trial>_manual_added_rois.json`：手动画的新 ROI 坐标
 - `<trial>_manual_added_roi_traces.csv`：手画 ROI 的 trace
 - `<trial>_manual_curation_summary.json`：本次校对摘要
 
