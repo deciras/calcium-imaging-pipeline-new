@@ -534,7 +534,7 @@ class CurationWindow(QMainWindow):
         frame = normalize_frame(self.movie[self.frame_index], self.low_pct, self.high_pct)
         height, width = frame.shape
         qimg = QImage(frame.data, width, height, width, QImage.Format.Format_Grayscale8).copy()
-        pixmap = QPixmap.fromImage(qimg).convertToFormat(QPixmap.Format.Format_ARGB32)
+        pixmap = QPixmap.fromImage(qimg)
         painter = QPainter(pixmap)
         if overlay:
             self.paint_rois(painter)
