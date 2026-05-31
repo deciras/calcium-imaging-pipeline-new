@@ -1,6 +1,6 @@
 # 人工 ROI 校对 GUI 说明
 
-这个工具用于 suite2p 跑完之后人工检查 ROI。目标是少一点折磨，多一点可控：能看视频、能看 ROI、能手动剔除错的 ROI，也能用多边形补画 suite2p 漏掉的细胞。
+这个工具用于人工标注/校对 ROI。目标是少一点折磨，多一点可控：能看视频、能看 ROI、能手动剔除错的 ROI，也能用 freehand 或椭圆补画 suite2p 漏掉的细胞。
 
 当前推荐主线是：05e 人工标注/校对，之后 06 读取人工结果。suite2p 可以只作为可选参考层，用来“捡”少数可用 ROI；05b/05c 那套“学习历史手画 ROI 再自动筛选”的路线保留为可选实验功能，不再作为主线。
 
@@ -20,10 +20,13 @@ python3 current/run_pipeline.py \
 
 Linux 工作站上也用同一套命令。只需要把 `--data-root` 改成 Linux 上真实数据的位置。
 
+如果不写 `--data-root`，会弹出窗口让你选择数据根目录。
+
 ## 窗口怎么看
 
+- `Files`：显示当前数据根目录里找到的 trial。可以点 `Load selected` 打开选中的 trial，也可以点 `Next` 切到下一个。
 - 左边窗口：默认只显示视频，不显示 suite2p ROI。
-- `show suite2p refs`：需要参考 suite2p 时再打开；打开时才读取 suite2p ROI。未选中的参考 ROI 是灰蓝色，选中的参考 ROI 是绿色，当前选中的是黄色。
+- `show suite2p refs`：需要参考 suite2p 时再打开；打开时才读取 suite2p ROI。未选中的参考 ROI 是橙色，选中的参考 ROI 是绿色，当前查看的是黄色。
 - 右边窗口：切到 `draw freehand ROI` 后，可以按住鼠标或数位板笔直接圈画 ROI。
 - 右边窗口：切到 `draw ellipse ROI` 后，可以拖出一个椭圆 ROI。
 - 下方滑条：拖动时间帧。
@@ -33,8 +36,8 @@ Linux 工作站上也用同一套命令。只需要把 `--data-root` 改成 Linu
 ## 怎么从 suite2p 里捡 ROI
 
 1. 打开 `show suite2p refs`。
-2. 在左边视频里点一个 suite2p ROI。
-3. 这个 ROI 会被加入/移出最终人工 ROI set。
+2. 在左边视频里单击一个 suite2p ROI，可以查看它的 trace。
+3. 双击这个 suite2p ROI，才会加入/移出最终人工 ROI set。
 4. 最后只有被选中的 suite2p ROI 会保存；其他 suite2p ROI 都不会进入后续分析。
 
 这个操作不会改 suite2p 原始文件，只会另存一个新的人工 ROI set。
@@ -51,8 +54,11 @@ Linux 工作站上也用同一套命令。只需要把 `--data-root` 改成 Linu
 - `K`：keep 当前 ROI
 - `Ctrl+Z` 或 `U`：撤销上一步 keep/reject/delete/add
 - `S`：显示/隐藏 suite2p 参考层
+- `方向键`：跳到上下左右方向最近的 ROI
 - `Esc`：撤销当前手绘线最后一段
 - `Enter`：完成当前手绘/椭圆 ROI
+
+切换 trial 或退出窗口前，如果当前 ROI 修改还没有保存，会提示是否保存。
 
 ## 怎么手动画新 ROI
 
