@@ -390,6 +390,52 @@ python3 current/run_pipeline.py \
 - `<trial>_independent_roi_candidate_overlay.png`
 - `<trial>_independent_roi_candidate_overlay.pdf`
 
+## Step 05e：打开人工 ROI 校对 GUI
+
+05e 是一个交互式窗口，不是批量计算步骤。它用来在 suite2p 之后人工检查 ROI：左边看带 ROI 圈的电影，右边看原电影；可以把已有 ROI 标成 keep/reject，也可以在右边用多边形画新的 ROI。
+
+打开一个 trial：
+
+```bash
+cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipeline-new
+
+python3 current/run_pipeline.py \
+  --steps 05e \
+  --data-root /Users/dingyifei/Documents/calcium-imaging-pipeline-new/test_dataset \
+  --trial-id 20260428_Euprymna_retina2_25x \
+  --movie-kind corrected
+```
+
+Linux 工作站也是同样格式，只需要把 `--data-root` 改成工作站上的数据路径。
+
+窗口里：
+
+- 左边：视频加 suite2p ROI 圈；点 ROI 可以选中它
+- 右边：干净视频；切到 `draw polygon ROI` 后，连续点几下画多边形
+- `Finish polygon ROI`：闭合并加入一个手画 ROI
+- `Keep selected` / `Reject selected`：保留或剔除当前 suite2p ROI
+- Trace 面板：显示当前 ROI 的 `F`、`Fneu`、`F - 0.7Fneu` 和 dF/F
+- `Save manual curation`：保存结果，但不会改写 suite2p 原始输出
+
+05e 输出到：
+
+```text
+DATA_ROOT/05e_roi_manual_curation/<trial>/
+```
+
+主要输出：
+
+- `<trial>_iscell_manual.npy`
+- `<trial>_manual_added_rois.json`
+- `<trial>_manual_added_roi_traces.csv`
+- `<trial>_manual_curation_summary.json`
+
+注意：
+
+- 手动画的新 ROI 现在是多边形，不是圆形
+- 手画 ROI 的 neuropil 是用 ROI 周围一圈像素近似估计的，适合人工判断 trace 是否像细胞
+- 这一版 05e 先负责“校对和保存”，还没有自动接入 06；后续可以让 06 优先读取 05e 的人工校对结果
+
 ## Step 06：提取 dF/F
 
 安全运行：

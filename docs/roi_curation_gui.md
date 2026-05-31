@@ -1,0 +1,65 @@
+# 人工 ROI 校对 GUI 说明
+
+这个工具用于 suite2p 跑完之后人工检查 ROI。目标是少一点折磨，多一点可控：能看视频、能看 ROI、能手动剔除错的 ROI，也能用多边形补画 suite2p 漏掉的细胞。
+
+## 打开方式
+
+```bash
+cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipeline-new
+
+python3 current/run_pipeline.py \
+  --steps 05e \
+  --data-root /Users/dingyifei/Documents/calcium-imaging-pipeline-new/test_dataset \
+  --trial-id 20260428_Euprymna_retina2_25x \
+  --movie-kind corrected
+```
+
+Linux 工作站上也用同一套命令。只需要把 `--data-root` 改成 Linux 上真实数据的位置。
+
+## 窗口怎么看
+
+- 左边窗口：视频加 suite2p ROI 圈。点一个 ROI，就会选中它。
+- 右边窗口：干净视频。切到 `draw polygon ROI` 后，可以在这里手动画新 ROI。
+- 下方滑条：拖动时间帧。
+- 右侧列表：已有 suite2p ROI 列表。
+- Trace 图：显示当前选中 ROI 的 `F`、`Fneu`、`F - 0.7Fneu` 和 dF/F。
+
+## 怎么校对已有 ROI
+
+1. 在左边视频或右侧 ROI 列表里选中一个 ROI。
+2. 看它的位置和 trace。
+3. 像细胞就点 `Keep selected`。
+4. 不像细胞就点 `Reject selected`。
+
+这个操作不会改 suite2p 原始文件，只会另存一个人工校对版。
+
+## 怎么手动画新 ROI
+
+1. 把 `right image mode` 切成 `draw polygon ROI`。
+2. 在右边视频上沿着细胞边界连续点几个点。
+3. 点错可以按 `Undo polygon point`。
+4. 画完点 `Finish polygon ROI`。
+5. Trace 图会立刻显示这个手画 ROI 的信号。
+
+手画 ROI 是多边形，不是圆形。新 ROI 的 neuropil 先用 ROI 周围一圈像素近似估计，所以可以马上看 `F - 0.7Fneu` 和 dF/F。
+
+## 保存了什么
+
+输出位置：
+
+```text
+DATA_ROOT/05e_roi_manual_curation/<trial>/
+```
+
+主要文件：
+
+- `<trial>_iscell_manual.npy`：已有 suite2p ROI 的人工 keep/reject 结果
+- `<trial>_manual_added_rois.json`：手动画的新 ROI 多边形坐标
+- `<trial>_manual_added_roi_traces.csv`：手画 ROI 的 trace
+- `<trial>_manual_curation_summary.json`：本次校对摘要
+
+## 当前限制
+
+- 这一版 05e 先负责人工校对和保存结果。
+- 06 还没有默认读取 05e 的手画新 ROI；下一步可以把 05e 输出接进 06。
+- 手画 ROI 的 neuropil 是近似值，用来辅助判断 trace，不等同于 suite2p 的 neuropil mask。

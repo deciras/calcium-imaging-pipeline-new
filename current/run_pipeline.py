@@ -61,6 +61,7 @@ class PipelineStep:
     accepts_similarity_options: bool = False
     accepts_clustering_options: bool = False
     accepts_leiden_options: bool = False
+    accepts_roi_gui_options: bool = False
 
 
 # ``env=None`` means: run with the same Python that launched run_pipeline.py.
@@ -166,6 +167,14 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
         accepts_step_dry_run=True,
         accepts_output_root=True,
         accepts_dpi=True,
+    ),
+    PipelineStep(
+        step_id="05e",
+        name="manual ROI curation GUI",
+        script="05e_roi_curation_gui.py",
+        env="caiman",
+        accepts_data_root=True,
+        accepts_roi_gui_options=True,
     ),
     PipelineStep(
         step_id="06",
@@ -458,6 +467,8 @@ def build_managed_step_args(
     trace_weight: float | None,
     trace_source: str | None,
     neuropil_coeff: float | None,
+    trial_id: str | None,
+    movie_kind: str | None,
     roi_source: str | None,
     f0_mode: str | None,
     f0_percentile: float | None,
@@ -578,6 +589,17 @@ def build_managed_step_args(
                 managed_args.extend([option_name, str(option_value)])
         if require_suite2p_iscell:
             managed_args.append("--require-suite2p-iscell")
+
+    if step.accepts_roi_gui_options:
+        roi_gui_options = (
+            ("--trial-id", trial_id),
+            ("--movie-kind", movie_kind),
+            ("--neuropil-coeff", neuropil_coeff),
+            ("--f0-percentile", f0_percentile),
+        )
+        for option_name, option_value in roi_gui_options:
+            if option_value is not None:
+                managed_args.extend([option_name, str(option_value)])
 
     if step.accepts_dff_options:
         dff_options = (
@@ -723,6 +745,8 @@ def resolve_steps(
     trace_weight: float | None,
     trace_source: str | None,
     neuropil_coeff: float | None,
+    trial_id: str | None,
+    movie_kind: str | None,
     roi_source: str | None,
     f0_mode: str | None,
     f0_percentile: float | None,
@@ -808,6 +832,8 @@ def resolve_steps(
             trace_weight=trace_weight,
             trace_source=trace_source,
             neuropil_coeff=neuropil_coeff,
+            trial_id=trial_id,
+            movie_kind=movie_kind,
             roi_source=roi_source,
             f0_mode=f0_mode,
             f0_percentile=f0_percentile,
@@ -1098,6 +1124,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--require-suite2p-iscell", action="store_true", help="Step 05c: require suite2p iscell==1 in addition to shape prior.")
     parser.add_argument("--neuropil-coeff", type=float, default=None, help="Steps 05c/06: coefficient for suite2p Fneu subtraction.")
+    parser.add_argument("--trial-id", default=None, help="Step 05e: trial folder name to open in the manual ROI curation GUI.")
+    parser.add_argument(
+        "--movie-kind",
+        choices=("corrected", "spatial-highpass"),
+        default=None,
+        help="Step 05e: movie shown in the manual ROI curation GUI.",
+    )
     parser.add_argument(
         "--roi-source",
         choices=("auto", "curated", "suite2p", "all"),
@@ -1244,6 +1277,8 @@ def main(argv: list[str] | None = None) -> int:
             trace_weight=args.trace_weight,
             trace_source=args.trace_source,
             neuropil_coeff=args.neuropil_coeff,
+            trial_id=args.trial_id,
+            movie_kind=args.movie_kind,
             roi_source=args.roi_source,
             f0_mode=args.f0_mode,
             f0_percentile=args.f0_percentile,
