@@ -248,9 +248,11 @@ DATA_ROOT/05_suite2p_roi_detection/
 - `benchmark/suite2p/roi_overlay.pdf`
 - `suite2p_trial_summary.json`
 
-## Step 05b：从手画 ROI 建立 prior
+## Step 05b：从手画 ROI 建立 prior（可选实验功能）
 
 05b 会读取历史手画 ROI 文件夹里的 `RoiSet.zip`。如果同一文件夹里有 ImageJ/Fiji 导出的 `Results.csv` 和 `Overlay Elements*.csv`，它还会把手画 ROI 的 trace 特征一起学进去。
+
+现在主线更倾向于用 05e 做人工校对。05b 保留为可选实验功能，不再是必须步骤。
 
 推荐运行：
 
@@ -280,9 +282,11 @@ python3 current/run_pipeline.py \
 - `manual_roi_trace_summary.csv`
 - shape / trace 分布图 PNG/PDF
 
-## Step 05c：ROI 质量筛选
+## Step 05c：ROI 质量筛选（可选实验功能）
 
 05c 会读取 05 的 suite2p ROI，再用 05b 从历史手画 ROI 得到的形状和 trace 信息做质控。它不会修改 05 的原始 suite2p 输出，只会生成新的 curated 文件夹。
+
+现在主线更倾向于人工校对：05 跑 suite2p，05e 打开 GUI 校对，之后 06 读取 05e 结果。05c 保留为可选实验功能。
 
 重要：05c 默认不相信 suite2p 的 `iscell` 分类。也就是说，suite2p 说某个 ROI 不是 cell，05c 仍然可以把它救回来。只有手动加 `--require-suite2p-iscell` 时，才会要求 suite2p 也认为它是 cell。
 
@@ -410,12 +414,22 @@ Linux 工作站也是同样格式，只需要把 `--data-root` 改成工作站�
 
 窗口里：
 
-- 左边：视频加 suite2p ROI 圈；点 ROI 可以选中它
+- 左边：视频加 suite2p ROI 原始形状；点 ROI 可以选中它
 - 右边：干净视频；切到 `draw polygon ROI` 后，连续点几下画多边形
 - `Finish polygon ROI`：闭合并加入一个手画 ROI
-- `Keep selected` / `Reject selected`：保留或剔除当前 suite2p ROI
+- `Keep selected` / `Reject selected`：保留或标记不用当前 ROI
+- `Delete selected`：从人工校对输出里删除当前 ROI
 - Trace 面板：显示当前 ROI 的 `F`、`Fneu`、`F - 0.7Fneu` 和 dF/F
 - `Save manual curation`：保存结果，但不会改写 suite2p 原始输出
+
+快捷键：
+
+- `Delete` 或 `Backspace`：删除当前 ROI
+- `X`：reject 当前 ROI
+- `K`：keep 当前 ROI
+- `Ctrl+Z` 或 `U`：撤销上一步 keep/reject/delete/add
+- `Esc`：撤销当前多边形的最后一个点
+- `Enter`：完成当前多边形 ROI
 
 05e 输出到：
 
@@ -426,6 +440,9 @@ DATA_ROOT/05e_roi_manual_curation/<trial>/
 主要输出：
 
 - `<trial>_iscell_manual.npy`
+- `<trial>_kept_suite2p_indices.csv`
+- `<trial>_rejected_suite2p_indices.csv`
+- `<trial>_deleted_suite2p_indices.csv`
 - `<trial>_manual_added_rois.json`
 - `<trial>_manual_added_roi_traces.csv`
 - `<trial>_manual_curation_summary.json`
@@ -433,6 +450,8 @@ DATA_ROOT/05e_roi_manual_curation/<trial>/
 注意：
 
 - 手动画的新 ROI 现在是多边形，不是圆形
+- suite2p ROI 显示为原本的像素边界，不再简化成圆圈
+- `reject` 表示保留记录但后续不用；`delete` 表示从人工校对输出中移除
 - 手画 ROI 的 neuropil 是用 ROI 周围一圈像素近似估计的，适合人工判断 trace 是否像细胞
 - 这一版 05e 先负责“校对和保存”，还没有自动接入 06；后续可以让 06 优先读取 05e 的人工校对结果
 

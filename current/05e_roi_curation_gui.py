@@ -12,6 +12,7 @@ The GUI is intentionally conservative:
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import sys
 from dataclasses import dataclass
@@ -181,8 +182,27 @@ def annulus_mask(roi_mask: np.ndarray, inner_px: int = 3, outer_px: int = 12) ->
     return outer & ~inner
 
 
+def suite2p_roi_boundary(ypix: np.ndarray, xpix: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Return boundary pixels so suite2p ROIs keep their real shape on screen."""
+    if ypix.size == 0 or xpix.size == 0:
+        return ypix, xpix
+    y0, y1 = int(np.min(ypix)), int(np.max(ypix))
+    x0, x1 = int(np.min(xpix)), int(np.max(xpix))
+    mask = np.zeros((y1 - y0 + 1, x1 - x0 + 1), dtype=bool)
+    mask[ypix - y0, xpix - x0] = True
+    try:
+        from scipy import ndimage as ndi
+
+        inner = ndi.binary_erosion(mask, iterations=1, border_value=0)
+        boundary = mask & ~inner
+    except Exception:
+        boundary = mask
+    by, bx = np.nonzero(boundary)
+    return by + y0, bx + x0
+
+
 class VideoCanvas(QLabel):
-    clicked = Signal(float, float)
+    clicked = Signal(float, float, object)
 
     def __init__(self) -> None:
         super().__init__()
@@ -200,7 +220,7 @@ class VideoCanvas(QLabel):
             return
         x = (point.x() - self._pixmap_rect.left()) / self._pixmap_rect.width() * self._image_shape[1]
         y = (point.y() - self._pixmap_rect.top()) / self._pixmap_rect.height() * self._image_shape[0]
-        self.clicked.emit(float(x), float(y))
+        self.clicked.emit(float(x), float(y), event.button())
 
     def set_rendered_pixmap(self, pixmap: QPixmap, image_shape: tuple[int, int]) -> None:
         self._image_shape = image_shape
@@ -255,6 +275,7 @@ class CurationWindow(QMainWindow):
         self.f0_percentile = float(f0_percentile)
         self.f0_eps = float(f0_eps)
         self.stat = np.load(paths.stat_path, allow_pickle=True)
+        self.roi_cache = self.build_roi_cache()
         self.iscell = load_iscell(paths, len(self.stat))
         self.F = self.load_trace_array(paths.f_path, len(self.stat))
         self.Fneu = self.load_trace_array(paths.fneu_path, len(self.stat))
@@ -262,8 +283,10 @@ class CurationWindow(QMainWindow):
         self.frame_index = 0
         self.selected_roi: int | None = None
         self.selected_manual_roi: int | None = None
+        self.deleted_existing: set[int] = set()
         self.added_rois: list[dict] = []
         self.current_polygon: list[tuple[float, float]] = []
+        self.undo_stack: list[dict] = []
         self.low_pct = 1.0
         self.high_pct = 99.0
 
@@ -298,6 +321,10 @@ class CurationWindow(QMainWindow):
         keep_btn.clicked.connect(lambda: self.set_selected_state(1))
         reject_btn = QPushButton("Reject selected")
         reject_btn.clicked.connect(lambda: self.set_selected_state(0))
+        delete_btn = QPushButton("Delete selected")
+        delete_btn.clicked.connect(self.delete_selected)
+        undo_action_btn = QPushButton("Undo")
+        undo_action_btn.clicked.connect(self.undo_last_action)
         undo_btn = QPushButton("Undo polygon point")
         undo_btn.clicked.connect(self.undo_polygon_point)
         finish_btn = QPushButton("Finish polygon ROI")
@@ -318,6 +345,8 @@ class CurationWindow(QMainWindow):
         controls.addWidget(self.show_rejected)
         controls.addWidget(keep_btn)
         controls.addWidget(reject_btn)
+        controls.addWidget(delete_btn)
+        controls.addWidget(undo_action_btn)
         controls.addSpacing(10)
         controls.addWidget(QLabel("right image mode"))
         controls.addWidget(self.mode_combo)
@@ -354,6 +383,25 @@ class CurationWindow(QMainWindow):
         self.refresh()
         self.update_trace_plot()
 
+    def build_roi_cache(self) -> list[dict]:
+        cache: list[dict] = []
+        for roi in self.stat:
+            if not isinstance(roi, dict):
+                cache.append({"ypix": np.array([], dtype=np.int32), "xpix": np.array([], dtype=np.int32)})
+                continue
+            ypix = np.asarray(roi.get("ypix", []), dtype=np.int32)
+            xpix = np.asarray(roi.get("xpix", []), dtype=np.int32)
+            bypix, bxpix = suite2p_roi_boundary(ypix, xpix)
+            cache.append(
+                {
+                    "ypix": ypix,
+                    "xpix": xpix,
+                    "boundary_ypix": np.asarray(bypix, dtype=np.int32),
+                    "boundary_xpix": np.asarray(bxpix, dtype=np.int32),
+                }
+            )
+        return cache
+
     @staticmethod
     def load_trace_array(path: Path, n_roi: int) -> np.ndarray | None:
         if not path.exists():
@@ -368,6 +416,8 @@ class CurationWindow(QMainWindow):
         self.roi_list.blockSignals(True)
         self.roi_list.clear()
         for idx in range(len(self.stat)):
+            if idx in self.deleted_existing:
+                continue
             if not self.show_rejected.isChecked() and self.iscell[idx, 0] <= 0:
                 continue
             item = QListWidgetItem(f"{idx:04d} | {'keep' if self.iscell[idx, 0] > 0 else 'reject'}")
@@ -403,11 +453,36 @@ class CurationWindow(QMainWindow):
         self.refresh()
         self.update_trace_plot()
 
-    def handle_overlay_click(self, x: float, y: float) -> None:
+    def handle_overlay_click(self, x: float, y: float, button: int) -> None:
+        best_idx, best_dist = self.nearest_existing_roi(x, y)
+        if button == Qt.MouseButton.RightButton:
+            if best_idx is not None and best_dist <= 100:
+                self.selected_roi = best_idx
+                self.selected_manual_roi = None
+                self.set_selected_state(0)
+                self.status.showMessage(f"Rejected ROI {best_idx}")
+            return
+        if best_idx is not None and best_dist <= 100:
+            self.selected_roi = best_idx
+            self.selected_manual_roi = None
+            self.status.showMessage(f"Selected ROI {best_idx}")
+            self.refresh()
+            self.update_trace_plot()
+            return
+
+        manual_idx = self.manual_roi_at(x, y)
+        if manual_idx is not None:
+            self.selected_roi = None
+            self.selected_manual_roi = manual_idx
+            self.status.showMessage(f"Selected manual ROI {self.added_rois[manual_idx]['manual_roi_id']}")
+            self.refresh()
+            self.update_trace_plot()
+
+    def nearest_existing_roi(self, x: float, y: float) -> tuple[int | None, float]:
         best_idx = None
         best_dist = float("inf")
-        for idx, roi in enumerate(self.stat):
-            if not isinstance(roi, dict):
+        for idx, roi in enumerate(self.roi_cache):
+            if idx in self.deleted_existing:
                 continue
             ypix = np.asarray(roi.get("ypix", []), dtype=float)
             xpix = np.asarray(roi.get("xpix", []), dtype=float)
@@ -419,15 +494,30 @@ class CurationWindow(QMainWindow):
             if dist < best_dist:
                 best_dist = dist
                 best_idx = idx
-        if best_idx is not None and best_dist <= 100:
-            self.selected_roi = best_idx
-            self.selected_manual_roi = None
-            self.status.showMessage(f"Selected ROI {best_idx}")
-            self.refresh()
-            self.update_trace_plot()
+        return best_idx, best_dist
 
-    def handle_right_click(self, x: float, y: float) -> None:
+    def manual_roi_at(self, x: float, y: float) -> int | None:
+        for idx in range(len(self.added_rois) - 1, -1, -1):
+            roi = self.added_rois[idx]
+            if roi.get("status", "accepted") == "rejected" and not self.show_rejected.isChecked():
+                continue
+            points = roi.get("points", [])
+            if len(points) >= 3 and MplPath(points).contains_point((x, y)):
+                return idx
+        return None
+
+    def handle_right_click(self, x: float, y: float, button: int) -> None:
         if self.mode_combo.currentText() != "draw polygon ROI":
+            if button == Qt.MouseButton.LeftButton:
+                manual_idx = self.manual_roi_at(x, y)
+                if manual_idx is not None:
+                    self.selected_roi = None
+                    self.selected_manual_roi = manual_idx
+                    self.refresh()
+                    self.update_trace_plot()
+            return
+        if button == Qt.MouseButton.RightButton:
+            self.undo_polygon_point()
             return
         self.current_polygon.append((float(x), float(y)))
         self.status.showMessage(f"Polygon point {len(self.current_polygon)}: x={x:.1f}, y={y:.1f}")
@@ -439,6 +529,8 @@ class CurationWindow(QMainWindow):
             self.refresh()
 
     def clear_polygon(self) -> None:
+        if self.current_polygon:
+            self.push_undo("clear-polygon")
         self.current_polygon = []
         self.refresh()
 
@@ -450,6 +542,7 @@ class CurationWindow(QMainWindow):
         if int(mask.sum()) < 3:
             QMessageBox.warning(self, "Polygon ROI", "The polygon is too small.")
             return
+        self.push_undo("add-manual")
         roi = self.build_manual_roi(mask)
         self.added_rois.append(roi)
         self.selected_roi = None
@@ -472,6 +565,7 @@ class CurationWindow(QMainWindow):
         return {
             "manual_roi_id": len(self.added_rois) + 1,
             "roi_type": "polygon",
+            "status": "accepted",
             "points": [[float(x), float(y)] for x, y in self.current_polygon],
             "frame_added": int(self.frame_index),
             "n_pixels": int(mask.sum()),
@@ -500,12 +594,76 @@ class CurationWindow(QMainWindow):
         return np.asarray(np.nanmean(pixels, axis=1), dtype=np.float32)
 
     def set_selected_state(self, state: int) -> None:
-        if self.selected_roi is None:
+        if self.selected_manual_roi is not None and 0 <= self.selected_manual_roi < len(self.added_rois):
+            self.push_undo("manual-state")
+            self.added_rois[self.selected_manual_roi]["status"] = "accepted" if state else "rejected"
+            self.refresh()
+            self.update_trace_plot()
             return
+        if self.selected_roi is None or self.selected_roi in self.deleted_existing:
+            return
+        self.push_undo("existing-state")
         self.iscell[self.selected_roi, 0] = float(state)
         self.iscell[self.selected_roi, 1] = 1.0 if state else 0.0
         self.populate_roi_list()
         self.refresh()
+        self.update_trace_plot()
+
+    def delete_selected(self) -> None:
+        if self.selected_manual_roi is not None and 0 <= self.selected_manual_roi < len(self.added_rois):
+            self.push_undo("delete-manual")
+            removed = self.added_rois.pop(self.selected_manual_roi)
+            self.selected_manual_roi = None
+            self.selected_roi = None
+            self.status.showMessage(f"Deleted manual ROI {removed.get('manual_roi_id')}")
+            self.populate_roi_list()
+            self.refresh()
+            self.update_trace_plot()
+            return
+        if self.selected_roi is None:
+            return
+        self.push_undo("delete-existing")
+        deleted = int(self.selected_roi)
+        self.deleted_existing.add(deleted)
+        self.iscell[deleted, 0] = 0.0
+        self.iscell[deleted, 1] = 0.0
+        self.selected_roi = None
+        self.selected_manual_roi = None
+        self.status.showMessage(f"Deleted suite2p ROI {deleted} from manual curation output")
+        self.populate_roi_list()
+        self.refresh()
+        self.update_trace_plot()
+
+    def push_undo(self, label: str) -> None:
+        self.undo_stack.append(
+            {
+                "label": label,
+                "iscell": self.iscell.copy(),
+                "deleted_existing": set(self.deleted_existing),
+                "added_rois": copy.deepcopy(self.added_rois),
+                "current_polygon": list(self.current_polygon),
+                "selected_roi": self.selected_roi,
+                "selected_manual_roi": self.selected_manual_roi,
+            }
+        )
+        if len(self.undo_stack) > 50:
+            self.undo_stack.pop(0)
+
+    def undo_last_action(self) -> None:
+        if not self.undo_stack:
+            self.status.showMessage("Nothing to undo")
+            return
+        state = self.undo_stack.pop()
+        self.iscell = state["iscell"]
+        self.deleted_existing = state["deleted_existing"]
+        self.added_rois = state["added_rois"]
+        self.current_polygon = state["current_polygon"]
+        self.selected_roi = state["selected_roi"]
+        self.selected_manual_roi = state["selected_manual_roi"]
+        self.status.showMessage(f"Undid {state['label']}")
+        self.populate_roi_list()
+        self.refresh()
+        self.update_trace_plot()
 
     def update_trace_plot(self) -> None:
         if self.selected_manual_roi is not None and 0 <= self.selected_manual_roi < len(self.added_rois):
@@ -544,31 +702,32 @@ class CurationWindow(QMainWindow):
         return pixmap
 
     def paint_rois(self, painter: QPainter) -> None:
-        for idx, roi in enumerate(self.stat):
-            if not isinstance(roi, dict):
+        for idx, roi in enumerate(self.roi_cache):
+            if idx in self.deleted_existing:
                 continue
             keep = self.iscell[idx, 0] > 0
             if not keep and not self.show_rejected.isChecked():
                 continue
-            ypix = np.asarray(roi.get("ypix", []), dtype=np.int32)
-            xpix = np.asarray(roi.get("xpix", []), dtype=np.int32)
+            ypix = np.asarray(roi.get("boundary_ypix", []), dtype=np.int32)
+            xpix = np.asarray(roi.get("boundary_xpix", []), dtype=np.int32)
             if ypix.size == 0:
                 continue
             color = QColor(0, 255, 80, 210) if keep else QColor(255, 60, 60, 120)
             if self.selected_roi == idx:
                 color = QColor(255, 220, 0, 255)
             pen = QPen(color)
-            pen.setWidth(1)
+            pen.setWidth(2 if self.selected_roi == idx else 1)
             painter.setPen(pen)
-            cx, cy, radius = mask_bounds(ypix, xpix)
-            if np.isfinite(cx) and np.isfinite(cy):
-                painter.drawEllipse(QPoint(int(round(cx)), int(round(cy))), int(round(radius)), int(round(radius)))
+            for y, x in zip(ypix, xpix):
+                painter.drawPoint(int(x), int(y))
 
     def paint_added_rois(self, painter: QPainter) -> None:
         pen = QPen(QColor(0, 180, 255, 230))
         pen.setWidth(2)
         painter.setPen(pen)
         for idx, roi in enumerate(self.added_rois):
+            if roi.get("status", "accepted") == "rejected" and not self.show_rejected.isChecked():
+                continue
             points = [QPointF(float(x), float(y)) for x, y in roi.get("points", [])]
             if len(points) < 2:
                 continue
@@ -576,6 +735,10 @@ class CurationWindow(QMainWindow):
                 selected_pen = QPen(QColor(255, 220, 0, 255))
                 selected_pen.setWidth(3)
                 painter.setPen(selected_pen)
+            elif roi.get("status", "accepted") == "rejected":
+                rejected_pen = QPen(QColor(255, 60, 60, 160))
+                rejected_pen.setWidth(2)
+                painter.setPen(rejected_pen)
             else:
                 painter.setPen(pen)
             for p0, p1 in zip(points, points[1:] + points[:1]):
@@ -597,19 +760,70 @@ class CurationWindow(QMainWindow):
         shape = (self.movie.shape[-2], self.movie.shape[-1])
         self.left_canvas.set_rendered_pixmap(self.frame_pixmap(overlay=True), shape)
         self.right_canvas.set_rendered_pixmap(self.frame_pixmap(overlay=False), shape)
-        kept = int(np.sum(self.iscell[:, 0] > 0))
+        kept = int(np.sum((self.iscell[:, 0] > 0) & ~np.isin(np.arange(len(self.iscell)), list(self.deleted_existing))))
         self.status.showMessage(
             f"trial={self.paths.trial_id} | frame={self.frame_index}/{self.movie.shape[0]-1} | "
-            f"kept={kept}/{len(self.iscell)} | added={len(self.added_rois)} | polygon points={len(self.current_polygon)}"
+            f"kept={kept}/{len(self.iscell)} | deleted={len(self.deleted_existing)} | "
+            f"added={len(self.added_rois)} | polygon points={len(self.current_polygon)}"
         )
+
+    def keyPressEvent(self, event) -> None:  # type: ignore[override]
+        key = event.key()
+        modifiers = event.modifiers()
+        if key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            self.delete_selected()
+            return
+        if key == Qt.Key.Key_X:
+            self.set_selected_state(0)
+            return
+        if key == Qt.Key.Key_K:
+            self.set_selected_state(1)
+            return
+        if key == Qt.Key.Key_Z and modifiers & Qt.KeyboardModifier.ControlModifier:
+            self.undo_last_action()
+            return
+        if key == Qt.Key.Key_U:
+            self.undo_last_action()
+            return
+        if key == Qt.Key.Key_Escape:
+            self.undo_polygon_point()
+            return
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and self.mode_combo.currentText() == "draw polygon ROI":
+            self.finish_polygon_roi()
+            return
+        super().keyPressEvent(event)
 
     def save_outputs(self) -> None:
         self.paths.output_dir.mkdir(parents=True, exist_ok=True)
         iscell_path = self.paths.output_dir / f"{self.paths.trial_id}_iscell_manual.npy"
+        kept_path = self.paths.output_dir / f"{self.paths.trial_id}_kept_suite2p_indices.csv"
+        rejected_path = self.paths.output_dir / f"{self.paths.trial_id}_rejected_suite2p_indices.csv"
+        deleted_path = self.paths.output_dir / f"{self.paths.trial_id}_deleted_suite2p_indices.csv"
         additions_path = self.paths.output_dir / f"{self.paths.trial_id}_manual_added_rois.json"
         trace_path = self.paths.output_dir / f"{self.paths.trial_id}_manual_added_roi_traces.csv"
         summary_path = self.paths.output_dir / f"{self.paths.trial_id}_manual_curation_summary.json"
-        np.save(iscell_path, self.iscell.astype(np.float32))
+        iscell_to_save = self.iscell.astype(np.float32, copy=True)
+        if self.deleted_existing:
+            deleted_arr = np.asarray(sorted(self.deleted_existing), dtype=int)
+            iscell_to_save[deleted_arr, 0] = 0.0
+            iscell_to_save[deleted_arr, 1] = 0.0
+        np.save(iscell_path, iscell_to_save)
+
+        all_indices = np.arange(len(iscell_to_save), dtype=int)
+        deleted_mask = np.isin(all_indices, list(self.deleted_existing))
+        kept_indices = all_indices[(iscell_to_save[:, 0] > 0) & ~deleted_mask]
+        rejected_indices = all_indices[(iscell_to_save[:, 0] <= 0) & ~deleted_mask]
+        np.savetxt(kept_path, kept_indices, fmt="%d", delimiter=",", header="suite2p_original_id", comments="")
+        np.savetxt(rejected_path, rejected_indices, fmt="%d", delimiter=",", header="suite2p_original_id", comments="")
+        np.savetxt(
+            deleted_path,
+            np.asarray(sorted(self.deleted_existing), dtype=int),
+            fmt="%d",
+            delimiter=",",
+            header="suite2p_original_id",
+            comments="",
+        )
+
         serializable_rois = []
         trace_rows = []
         for roi in self.added_rois:
@@ -639,15 +853,25 @@ class CurationWindow(QMainWindow):
             "movie_path": str(self.paths.movie_path),
             "source_iscell": str(self.paths.curated_iscell_path or self.paths.iscell_path),
             "manual_iscell_path": str(iscell_path),
+            "kept_suite2p_indices_path": str(kept_path),
+            "rejected_suite2p_indices_path": str(rejected_path),
+            "deleted_suite2p_indices_path": str(deleted_path),
             "manual_added_rois_path": str(additions_path),
             "manual_added_roi_traces_path": str(trace_path) if trace_rows else None,
             "n_suite2p_roi": int(len(self.iscell)),
-            "n_kept_existing_roi": int(np.sum(self.iscell[:, 0] > 0)),
-            "n_rejected_existing_roi": int(np.sum(self.iscell[:, 0] <= 0)),
+            "n_kept_existing_roi": int(len(kept_indices)),
+            "n_rejected_existing_roi": int(len(rejected_indices)),
+            "n_deleted_existing_roi": int(len(self.deleted_existing)),
             "n_manual_added_roi": int(len(self.added_rois)),
+            "n_manual_added_accepted_roi": int(sum(roi.get("status", "accepted") == "accepted" for roi in self.added_rois)),
+            "n_manual_added_rejected_roi": int(sum(roi.get("status", "accepted") == "rejected" for roi in self.added_rois)),
             "neuropil_coeff": float(self.neuropil_coeff),
             "f0_percentile": float(self.f0_percentile),
-            "note": "Manual polygon ROI neuropil is estimated from a local annulus in the selected movie.",
+            "note": (
+                "Delete means excluded from downstream manual curation outputs. "
+                "Suite2p source files are not edited in place. Manual polygon ROI "
+                "neuropil is estimated from a local annulus in the selected movie."
+            ),
         }
         with summary_path.open("w", encoding="utf-8") as handle:
             json.dump(summary, handle, indent=2)
