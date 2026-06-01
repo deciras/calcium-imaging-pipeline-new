@@ -25,8 +25,9 @@ Linux 工作站上也用同一套命令。只需要把 `--data-root` 改成 Linu
 ## 窗口怎么看
 
 - `Files`：显示当前数据根目录里找到的 trial。可以点 `Load selected` 打开选中的 trial，也可以点 `Next` 切到下一个。
+- 右侧控制区可以上下滚动，屏幕较小时按钮不会被挤出窗口。
 - 左边窗口：默认只显示视频，不显示 suite2p ROI。
-- `show suite2p refs`：需要参考 suite2p 时再打开；打开时才读取 suite2p ROI。未选中的参考 ROI 是橙色，选中的参考 ROI 是绿色，当前查看的是黄色。
+- `show suite2p refs`：需要参考 suite2p 时再打开；打开时才读取 suite2p ROI。默认只显示 suite2p 原本 accepted 的 ROI；勾选 `show rejected` 才显示 rejected ROI。未选中的参考 ROI 是较细的半透明橙色，选中的参考 ROI 是绿色，当前查看的是黄色。
 - 右边窗口：切到 `draw freehand ROI` 后，可以按住鼠标或数位板笔直接圈画 ROI。
 - 右边窗口：切到 `draw ellipse ROI` 后，可以拖出一个椭圆 ROI。
 - 下方滑条：拖动时间帧。
@@ -94,6 +95,10 @@ DATA_ROOT/05e_roi_manual_curation/<trial>/
 - `<trial>_deleted_suite2p_indices.csv`：从人工校对输出中删除的 suite2p ROI 编号
 - `<trial>_manual_added_rois.json`：手动画的新 ROI 坐标
 - `<trial>_manual_added_roi_traces.csv`：手画 ROI 的 trace
+- `suite2p_compatible/plane0/stat.npy`：兼容 suite2p 风格的 ROI 文件
+- `suite2p_compatible/plane0/iscell.npy`：兼容 suite2p 风格的 ROI 标记
+- `suite2p_compatible/plane0/F.npy` / `Fneu.npy`：如果 trace 长度一致，会一起导出
+- `RoiSet.zip`：兼容 Fiji/ImageJ 的 ROI set
 - `<trial>_manual_curation_summary.json`：本次校对摘要
 
 ## 当前限制

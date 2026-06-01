@@ -14,7 +14,9 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import struct
 import sys
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -37,6 +39,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSlider,
     QSpinBox,
     QStatusBar,
@@ -250,6 +253,55 @@ def suite2p_roi_boundary(ypix: np.ndarray, xpix: np.ndarray) -> tuple[np.ndarray
     return by + y0, bx + x0
 
 
+def stat_dict_from_mask(mask: np.ndarray, roi_id: int) -> dict:
+    ypix, xpix = np.nonzero(mask)
+    lam = np.ones(len(xpix), dtype=np.float32)
+    med = np.array([float(np.mean(ypix)), float(np.mean(xpix))], dtype=np.float32) if len(xpix) else np.array([np.nan, np.nan])
+    return {
+        "ypix": ypix.astype(np.int32),
+        "xpix": xpix.astype(np.int32),
+        "lam": lam,
+        "med": med,
+        "npix": int(len(xpix)),
+        "overlap": np.zeros(len(xpix), dtype=bool),
+        "manual_roi_id": int(roi_id),
+    }
+
+
+def imagej_polygon_roi_bytes(points: list[tuple[float, float]], roi_name: str = "") -> bytes:
+    if len(points) < 3:
+        raise ValueError("ImageJ ROI needs at least 3 points")
+    xs = np.asarray([p[0] for p in points], dtype=float)
+    ys = np.asarray([p[1] for p in points], dtype=float)
+    left = int(np.floor(xs.min()))
+    top = int(np.floor(ys.min()))
+    right = int(np.ceil(xs.max())) + 1
+    bottom = int(np.ceil(ys.max())) + 1
+    rel_x = np.clip(np.rint(xs - left), 0, 65535).astype(">u2")
+    rel_y = np.clip(np.rint(ys - top), 0, 65535).astype(">u2")
+    n = int(len(points))
+    header = bytearray(64)
+    header[0:4] = b"Iout"
+    struct.pack_into(">H", header, 4, 227)
+    header[6] = 0  # polygon
+    struct.pack_into(">hhhhH", header, 8, top, left, bottom, right, n)
+    return bytes(header) + rel_x.tobytes() + rel_y.tobytes()
+
+
+def safe_roi_name(prefix: str, roi_id: int) -> str:
+    return f"{prefix}_{roi_id:04d}.roi"
+
+
+def ordered_boundary_points(ypix: np.ndarray, xpix: np.ndarray) -> list[tuple[float, float]]:
+    by, bx = suite2p_roi_boundary(np.asarray(ypix, dtype=np.int32), np.asarray(xpix, dtype=np.int32))
+    if len(bx) < 3:
+        return [(float(x), float(y)) for y, x in zip(by, bx)]
+    cx = float(np.mean(bx))
+    cy = float(np.mean(by))
+    order = np.argsort(np.arctan2(by - cy, bx - cx))
+    return [(float(bx[i]), float(by[i])) for i in order]
+
+
 class VideoCanvas(QLabel):
     clicked = Signal(float, float, object)
     double_clicked = Signal(float, float, object)
@@ -374,6 +426,7 @@ class CurationWindow(QMainWindow):
         self.F = None
         self.Fneu = None
         self.suite2p_loaded = False
+        self.suite2p_ref_flags = np.zeros((0,), dtype=bool)
         self.movie = movie_as_tyx(paths.movie_path)
         self.frame_index = 0
         self.selected_roi: int | None = None
@@ -489,6 +542,13 @@ class CurationWindow(QMainWindow):
         controls.addSpacing(10)
         controls.addWidget(save_btn)
 
+        controls_widget = QWidget()
+        controls_widget.setLayout(controls)
+        controls_scroll = QScrollArea()
+        controls_scroll.setWidgetResizable(True)
+        controls_scroll.setWidget(controls_widget)
+        controls_scroll.setMinimumWidth(360)
+
         image_layout = QHBoxLayout()
         image_layout.addWidget(self.left_canvas, stretch=1)
         image_layout.addWidget(self.right_canvas, stretch=1)
@@ -503,7 +563,7 @@ class CurationWindow(QMainWindow):
         left_layout.addLayout(image_layout)
         left_layout.addLayout(slider_layout)
         main_layout.addLayout(left_layout, stretch=1)
-        main_layout.addLayout(controls)
+        main_layout.addWidget(controls_scroll)
 
         widget = QWidget()
         widget.setLayout(main_layout)
@@ -583,6 +643,8 @@ class CurationWindow(QMainWindow):
         self.stat = np.load(self.paths.stat_path, allow_pickle=True)
         self.roi_cache = self.build_roi_cache()
         self.iscell = np.zeros((len(self.stat), 2), dtype=np.float32)
+        source_iscell = load_iscell(self.paths, len(self.stat))
+        self.suite2p_ref_flags = source_iscell[:, 0].astype(bool)
         self.F = self.load_trace_array(self.paths.f_path, len(self.stat))
         self.Fneu = self.load_trace_array(self.paths.fneu_path, len(self.stat))
         self.suite2p_loaded = True
@@ -642,6 +704,7 @@ class CurationWindow(QMainWindow):
         self.F = None
         self.Fneu = None
         self.suite2p_loaded = False
+        self.suite2p_ref_flags = np.zeros((0,), dtype=bool)
         self.movie = movie_as_tyx(paths.movie_path)
         self.frame_index = 0
         self.selected_roi = None
@@ -695,6 +758,18 @@ class CurationWindow(QMainWindow):
         self.update_trace_plot()
 
     def handle_overlay_click(self, x: float, y: float, button: int) -> None:
+        manual_idx = self.manual_roi_at(x, y)
+        if manual_idx is not None:
+            self.selected_roi = None
+            self.selected_manual_roi = manual_idx
+            if button == Qt.MouseButton.RightButton:
+                self.set_selected_state(0)
+                self.status.showMessage(f"Rejected manual ROI {self.added_rois[manual_idx].get('manual_roi_id')}")
+            else:
+                self.status.showMessage(f"Selected manual ROI {self.added_rois[manual_idx]['manual_roi_id']}")
+                self.refresh()
+                self.update_trace_plot()
+            return
         if not self.show_suite2p_refs:
             return
         best_idx, best_dist = self.nearest_existing_roi(x, y)
@@ -713,13 +788,6 @@ class CurationWindow(QMainWindow):
             self.update_trace_plot()
             return
 
-        manual_idx = self.manual_roi_at(x, y)
-        if manual_idx is not None:
-            self.selected_roi = None
-            self.selected_manual_roi = manual_idx
-            self.status.showMessage(f"Selected manual ROI {self.added_rois[manual_idx]['manual_roi_id']}")
-            self.refresh()
-            self.update_trace_plot()
 
     def handle_overlay_double_click(self, x: float, y: float, button: object) -> None:
         if not self.show_suite2p_refs or button != Qt.MouseButton.LeftButton:
@@ -737,6 +805,8 @@ class CurationWindow(QMainWindow):
         best_dist = float("inf")
         for idx, roi in enumerate(self.roi_cache):
             if idx in self.deleted_existing:
+                continue
+            if idx < len(self.suite2p_ref_flags) and not self.suite2p_ref_flags[idx] and not self.show_rejected.isChecked():
                 continue
             ypix = np.asarray(roi.get("ypix", []), dtype=float)
             xpix = np.asarray(roi.get("xpix", []), dtype=float)
@@ -1056,23 +1126,25 @@ class CurationWindow(QMainWindow):
         for idx, roi in enumerate(self.roi_cache):
             if idx in self.deleted_existing:
                 continue
+            if idx < len(self.suite2p_ref_flags) and not self.suite2p_ref_flags[idx] and not self.show_rejected.isChecked():
+                continue
             keep = idx in self.selected_suite2p_refs
             ypix = np.asarray(roi.get("boundary_ypix", []), dtype=np.int32)
             xpix = np.asarray(roi.get("boundary_xpix", []), dtype=np.int32)
             if ypix.size == 0:
                 continue
-            color = QColor(0, 255, 80, 230) if keep else QColor(255, 128, 0, 230)
+            color = QColor(0, 255, 80, 230) if keep else QColor(255, 128, 0, 120)
             if self.selected_roi == idx:
                 color = QColor(255, 220, 0, 255)
             pen = QPen(color)
-            pen.setWidth(3 if self.selected_roi == idx else 2)
+            pen.setWidth(1)
             painter.setPen(pen)
             for y, x in zip(ypix, xpix):
                 painter.drawPoint(int(x), int(y))
 
     def paint_added_rois(self, painter: QPainter) -> None:
         pen = QPen(QColor(0, 180, 255, 230))
-        pen.setWidth(2)
+        pen.setWidth(1)
         painter.setPen(pen)
         for idx, roi in enumerate(self.added_rois):
             if roi.get("status", "accepted") == "rejected" and not self.show_rejected.isChecked():
@@ -1082,11 +1154,11 @@ class CurationWindow(QMainWindow):
                 continue
             if self.selected_manual_roi == idx:
                 selected_pen = QPen(QColor(255, 220, 0, 255))
-                selected_pen.setWidth(3)
+                selected_pen.setWidth(2)
                 painter.setPen(selected_pen)
             elif roi.get("status", "accepted") == "rejected":
                 rejected_pen = QPen(QColor(255, 60, 60, 160))
-                rejected_pen.setWidth(2)
+                rejected_pen.setWidth(1)
                 painter.setPen(rejected_pen)
             else:
                 painter.setPen(pen)
@@ -1096,8 +1168,8 @@ class CurationWindow(QMainWindow):
     def paint_current_polygon(self, painter: QPainter) -> None:
         if not self.current_polygon:
             return
-        pen = QPen(QColor(255, 120, 0, 235))
-        pen.setWidth(1 if self.mode_combo.currentText() == "draw freehand ROI" else 2)
+        pen = QPen(QColor(255, 120, 0, 220))
+        pen.setWidth(1)
         painter.setPen(pen)
         points = [QPointF(float(x), float(y)) for x, y in self.current_polygon]
         if self.mode_combo.currentText() != "draw freehand ROI":
@@ -1122,6 +1194,8 @@ class CurationWindow(QMainWindow):
         if self.show_suite2p_refs:
             for idx, roi in enumerate(self.roi_cache):
                 if idx in self.deleted_existing:
+                    continue
+                if idx < len(self.suite2p_ref_flags) and not self.suite2p_ref_flags[idx] and not self.show_rejected.isChecked():
                     continue
                 xpix = np.asarray(roi.get("xpix", []), dtype=float)
                 ypix = np.asarray(roi.get("ypix", []), dtype=float)
@@ -1236,7 +1310,10 @@ class CurationWindow(QMainWindow):
         additions_path = self.paths.output_dir / f"{self.paths.trial_id}_manual_added_rois.json"
         new_roi_set_path = self.paths.output_dir / f"{self.paths.trial_id}_manual_roi_set.json"
         trace_path = self.paths.output_dir / f"{self.paths.trial_id}_manual_added_roi_traces.csv"
+        suite2p_compat_dir = self.paths.output_dir / "suite2p_compatible" / "plane0"
+        fiji_roi_zip_path = self.paths.output_dir / "RoiSet.zip"
         summary_path = self.paths.output_dir / f"{self.paths.trial_id}_manual_curation_summary.json"
+        suite2p_compat_dir.mkdir(parents=True, exist_ok=True)
         iscell_to_save = np.zeros_like(self.iscell, dtype=np.float32)
         for idx in self.selected_suite2p_refs:
             iscell_to_save[idx, 0] = 1.0
@@ -1260,10 +1337,33 @@ class CurationWindow(QMainWindow):
 
         serializable_rois = []
         new_roi_set = []
+        suite2p_stat: list[dict] = []
+        suite2p_f_rows: list[np.ndarray] = []
+        suite2p_fneu_rows: list[np.ndarray] = []
+        fiji_rois: list[tuple[str, list[tuple[float, float]]]] = []
         for idx in sorted(self.selected_suite2p_refs):
             roi = self.roi_cache[idx]
             xpix = np.asarray(roi.get("xpix", []), dtype=int)
             ypix = np.asarray(roi.get("ypix", []), dtype=int)
+            lam = np.ones(len(xpix), dtype=np.float32)
+            suite2p_stat.append(
+                {
+                    "ypix": ypix.astype(np.int32),
+                    "xpix": xpix.astype(np.int32),
+                    "lam": lam,
+                    "med": np.array([float(np.mean(ypix)), float(np.mean(xpix))], dtype=np.float32) if xpix.size else np.array([np.nan, np.nan]),
+                    "npix": int(len(xpix)),
+                    "overlap": np.zeros(len(xpix), dtype=bool),
+                    "suite2p_original_id": int(idx),
+                }
+            )
+            if self.F is not None and idx < self.F.shape[0]:
+                suite2p_f_rows.append(np.asarray(self.F[idx], dtype=np.float32))
+            if self.Fneu is not None and idx < self.Fneu.shape[0]:
+                suite2p_fneu_rows.append(np.asarray(self.Fneu[idx], dtype=np.float32))
+            points = ordered_boundary_points(ypix, xpix)
+            if len(points) >= 3:
+                fiji_rois.append((safe_roi_name("suite2p", int(idx)), points))
             new_roi_set.append(
                 {
                     "roi_id": f"suite2p_{idx}",
@@ -1279,6 +1379,13 @@ class CurationWindow(QMainWindow):
             clean = {k: v for k, v in roi.items() if not k.startswith("_trace_")}
             serializable_rois.append(clean)
             if roi.get("status", "accepted") == "accepted":
+                points = [(float(x), float(y)) for x, y in roi.get("points", [])]
+                if len(points) >= 3:
+                    mask = polygon_mask(points, self.movie.shape[-2:])
+                    suite2p_stat.append(stat_dict_from_mask(mask, int(roi["manual_roi_id"])))
+                    fiji_rois.append((safe_roi_name("manual", int(roi["manual_roi_id"])), points))
+                suite2p_f_rows.append(np.asarray(roi["_trace_F"], dtype=np.float32))
+                suite2p_fneu_rows.append(np.asarray(roi["_trace_Fneu"], dtype=np.float32))
                 new_roi_set.append(
                     {
                         "roi_id": f"manual_{roi['manual_roi_id']}",
@@ -1302,6 +1409,20 @@ class CurationWindow(QMainWindow):
             json.dump(serializable_rois, handle, indent=2)
         with new_roi_set_path.open("w", encoding="utf-8") as handle:
             json.dump(new_roi_set, handle, indent=2)
+        np.save(suite2p_compat_dir / "stat.npy", np.asarray(suite2p_stat, dtype=object))
+        compat_iscell = np.ones((len(suite2p_stat), 2), dtype=np.float32)
+        np.save(suite2p_compat_dir / "iscell.npy", compat_iscell)
+        if suite2p_f_rows and len(suite2p_f_rows) == len(suite2p_stat):
+            frame_counts = {len(row) for row in suite2p_f_rows}
+            if len(frame_counts) == 1:
+                np.save(suite2p_compat_dir / "F.npy", np.vstack(suite2p_f_rows).astype(np.float32))
+        if suite2p_fneu_rows and len(suite2p_fneu_rows) == len(suite2p_stat):
+            frame_counts = {len(row) for row in suite2p_fneu_rows}
+            if len(frame_counts) == 1:
+                np.save(suite2p_compat_dir / "Fneu.npy", np.vstack(suite2p_fneu_rows).astype(np.float32))
+        with zipfile.ZipFile(fiji_roi_zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            for name, points in fiji_rois:
+                zf.writestr(name, imagej_polygon_roi_bytes(points, name))
         if trace_rows:
             with trace_path.open("w", encoding="utf-8") as handle:
                 handle.write("manual_roi_id,frame,F,Fneu,F_corrected,dff\n")
@@ -1316,6 +1437,8 @@ class CurationWindow(QMainWindow):
             "deleted_suite2p_indices_path": str(deleted_path),
             "manual_added_rois_path": str(additions_path),
             "manual_roi_set_path": str(new_roi_set_path),
+            "suite2p_compatible_dir": str(suite2p_compat_dir),
+            "fiji_roiset_zip_path": str(fiji_roi_zip_path),
             "manual_added_roi_traces_path": str(trace_path) if trace_rows else None,
             "n_suite2p_roi": int(len(self.iscell)),
             "n_selected_suite2p_reference_roi": int(len(kept_indices)),
@@ -1324,6 +1447,8 @@ class CurationWindow(QMainWindow):
             "n_manual_added_accepted_roi": int(sum(roi.get("status", "accepted") == "accepted" for roi in self.added_rois)),
             "n_manual_added_rejected_roi": int(sum(roi.get("status", "accepted") == "rejected" for roi in self.added_rois)),
             "n_new_roi_set": int(len(new_roi_set)),
+            "n_suite2p_compatible_roi": int(len(suite2p_stat)),
+            "n_fiji_roi": int(len(fiji_rois)),
             "neuropil_coeff": float(self.neuropil_coeff),
             "f0_percentile": float(self.f0_percentile),
             "note": (

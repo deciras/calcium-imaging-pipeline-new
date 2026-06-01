@@ -415,8 +415,10 @@ Linux 工作站也是同样格式，只需要把 `--data-root` 改成工作站�
 窗口里：
 
 - `Files`：显示当前数据根目录里找到的 trial；可用 `Load selected` 或 `Next` 切换
+- 右侧控制区可以上下滚动，屏幕较小时按钮不会被挤出窗口
 - 左边：默认只显示视频，不显示 suite2p ROI
-- `show suite2p refs`：需要参考 suite2p 时再打开；打开时才读取 suite2p ROI，未选中的参考 ROI 是橙色，选中的参考 ROI 是绿色
+- `show suite2p refs`：需要参考 suite2p 时再打开；打开时才读取 suite2p ROI；默认只显示 suite2p 原本 accepted 的 ROI，勾选 `show rejected` 才显示 rejected ROI
+- suite2p 未选中的参考 ROI 是较细的半透明橙色，选中的参考 ROI 是绿色
 - 左边单击 suite2p ROI：只查看 trace
 - 左边双击 suite2p ROI：加入/移出最终人工 ROI set
 - 右边：切到 `draw freehand ROI` 后，可以按住鼠标或数位板笔直接圈画，松开后自动生成 ROI
@@ -451,6 +453,9 @@ DATA_ROOT/05e_roi_manual_curation/<trial>/
 - `<trial>_deleted_suite2p_indices.csv`
 - `<trial>_manual_added_rois.json`
 - `<trial>_manual_added_roi_traces.csv`
+- `suite2p_compatible/plane0/stat.npy`
+- `suite2p_compatible/plane0/iscell.npy`
+- `RoiSet.zip`
 - `<trial>_manual_curation_summary.json`
 
 注意：
