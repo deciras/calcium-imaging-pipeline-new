@@ -415,6 +415,7 @@ Linux 工作站也是同样格式，只需要把 `--data-root` 改成工作站�
 窗口里：
 
 - `Movie source`：可以在 raw / motion corrected / spatial high-pass 之间切换
+- 切换 `Movie source` 只是换当前 trial 的显示底片，不会另存一套 ROI，也不会要求保存；手画 ROI 和已选 suite2p ROI 会继续保留
 - `Files`：显示当前数据根目录里找到的 trial；可用 `Load selected` 或 `Next` 切换
 - 右侧控制区可以上下滚动，屏幕较小时按钮不会被挤出窗口
 - 左边：默认只显示视频，不显示 suite2p ROI
@@ -446,6 +447,8 @@ Linux 工作站也是同样格式，只需要把 `--data-root` 改成工作站�
 播放状态下可以继续点选、删除、reject 或手画 ROI。点 `Pause`、按空格，或者开始拖动时间滑条时会暂停。GUI 会按帧前进并循环播放；如果电脑处理不过来，会播放得慢一点，但不会主动跳过中间帧。
 
 如果这个 trial 之前已经保存过 05e 结果，再次打开时会自动读回上次保存的校对状态，包括已选的 suite2p ROI、手画 ROI 和已移除的参考 ROI。可以分多次校对，不需要一次做完。
+
+05e 的保存结果按 trial 保存，不按 `Movie source` 分开保存。`raw`、`motion corrected` 和 `spatial high-pass` 只是不同查看方式，最终指向同一套人工 ROI 校对结果。
 
 05e 输出到：
 

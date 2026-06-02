@@ -706,23 +706,92 @@ class CurationWindow(QMainWindow):
         self.trial_list.blockSignals(False)
 
     def change_movie_kind(self) -> None:
-        new_kind = self.movie_kind_combo.currentData()
+        new_kind = str(self.movie_kind_combo.currentData())
         if new_kind == self.movie_kind:
             return
+
+        old_kind = self.movie_kind
+        try:
+            find_movie_path(self.data_root, self.paths.trial_id, new_kind)
+        except Exception:
+            current_trial_available = False
+        else:
+            current_trial_available = True
+
+        if current_trial_available:
+            self.switch_movie_source_for_current_trial(new_kind)
+            return
+
         if not self.maybe_save_before_switch():
-            old_index = self.movie_kind_combo.findData(self.movie_kind)
+            old_index = self.movie_kind_combo.findData(old_kind)
             if old_index >= 0:
                 self.movie_kind_combo.blockSignals(True)
                 self.movie_kind_combo.setCurrentIndex(old_index)
                 self.movie_kind_combo.blockSignals(False)
             return
-        self.movie_kind = str(new_kind)
+        self.movie_kind = new_kind
         self.refresh_trial_list(selected_trial_id=self.paths.trial_id)
         if not self.trial_ids:
             QMessageBox.warning(self, "Movie source", f"No {self.movie_kind} movies found under:\n{self.data_root}")
+            self.movie_kind = old_kind
+            old_index = self.movie_kind_combo.findData(old_kind)
+            if old_index >= 0:
+                self.movie_kind_combo.blockSignals(True)
+                self.movie_kind_combo.setCurrentIndex(old_index)
+                self.movie_kind_combo.blockSignals(False)
             return
         target = self.paths.trial_id if self.paths.trial_id in self.trial_ids else self.trial_ids[0]
         self.load_trial_id(target, already_checked=True)
+
+    def switch_movie_source_for_current_trial(self, new_kind: str) -> None:
+        was_playing = self.playing
+        if was_playing:
+            self.pause_playback()
+        try:
+            paths = find_trial_paths(self.data_root, self.paths.trial_id, new_kind)
+        except Exception as exc:
+            QMessageBox.warning(self, "Movie source", str(exc))
+            if was_playing:
+                self.start_playback()
+            return
+        self.movie_kind = new_kind
+        self.paths = paths
+        self.movie = movie_as_tyx(paths.movie_path)
+        self.frame_index = min(self.frame_index, max(self.movie.shape[0] - 1, 0))
+        self.frame_slider.setMaximum(max(self.movie.shape[0] - 1, 0))
+        self.frame_spin.setMaximum(max(self.movie.shape[0] - 1, 0))
+        self.frame_slider.blockSignals(True)
+        self.frame_spin.blockSignals(True)
+        self.frame_slider.setValue(self.frame_index)
+        self.frame_spin.setValue(self.frame_index)
+        self.frame_slider.blockSignals(False)
+        self.frame_spin.blockSignals(False)
+        self.current_polygon = []
+        self.ellipse_start = None
+        self.ellipse_current = None
+        self.freehand_drawing = False
+        self.recompute_manual_roi_traces()
+        self.refresh_trial_list(selected_trial_id=self.paths.trial_id)
+        self.refresh()
+        self.update_trace_plot()
+        self.status.showMessage(f"Switched movie source to {new_kind}; ROI edits were kept unsaved")
+        if was_playing:
+            self.start_playback()
+
+    def recompute_manual_roi_traces(self) -> None:
+        refreshed: list[dict] = []
+        for saved in self.added_rois:
+            points = [(float(x), float(y)) for x, y in saved.get("points", [])]
+            if len(points) < 3:
+                continue
+            mask = polygon_mask(points, self.movie.shape[-2:])
+            if int(mask.sum()) < 3:
+                continue
+            roi = self.build_manual_roi(mask)
+            roi.update({k: v for k, v in saved.items() if not k.startswith("_trace_")})
+            roi["points"] = points
+            refreshed.append(roi)
+        self.added_rois = refreshed
 
     def load_suite2p_refs(self) -> None:
         if self.paths.stat_path is None or not self.paths.stat_path.exists():
@@ -785,7 +854,7 @@ class CurationWindow(QMainWindow):
                 if int(mask.sum()) < 3:
                     continue
                 roi = self.build_manual_roi(mask)
-                roi.update(saved)
+                roi.update({k: v for k, v in saved.items() if not k.startswith("_trace_")})
                 roi["points"] = points
                 self.added_rois.append(roi)
             loaded_parts.append(f"{len(self.added_rois)} manual ROI(s)")

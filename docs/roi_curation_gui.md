@@ -28,6 +28,7 @@ Linux 工作站上也用同一套命令。只需要把 `--data-root` 改成 Linu
   - `raw (01 converted TIFF)`：01 转出的主成像 TIFF，文件名通常是 `*_Max_Proj.tif`
   - `motion corrected (03)`：03 运动矫正后的 movie
   - `spatial high-pass (04)`：04 空间高通滤波后的 movie
+- 切换 `Movie source` 只是换当前 trial 的显示底片，不会另存一套 ROI，也不会要求保存。手画 ROI 和已选 suite2p ROI 会继续保留。
 - `Files`：显示当前数据根目录里找到的 trial。可以点 `Load selected` 打开选中的 trial，也可以点 `Next` 切到下一个。
 - 右侧控制区可以上下滚动，屏幕较小时按钮不会被挤出窗口。
 - 左边窗口：默认只显示视频，不显示 suite2p ROI。
@@ -72,6 +73,8 @@ Linux 工作站上也用同一套命令。只需要把 `--data-root` 改成 Linu
 切换 trial 或退出窗口前，如果当前 ROI 修改还没有保存，会提示是否保存。
 
 如果这个 trial 之前已经保存过 05e 结果，再次打开时会自动读回上次保存的校对状态，包括已选的 suite2p ROI、手画 ROI 和已移除的参考 ROI。也就是说可以分多次慢慢校对，不需要一次做完。
+
+05e 的保存结果按 trial 保存，不按 `Movie source` 分开保存。`raw`、`motion corrected` 和 `spatial high-pass` 只是不同查看方式，最终指向同一套人工 ROI 校对结果。
 
 ## 怎么手动画新 ROI
 
