@@ -895,10 +895,8 @@ class CurationWindow(QMainWindow):
         best_idx, best_dist = self.nearest_existing_roi(x, y)
         if button == Qt.MouseButton.RightButton:
             if best_idx is not None and best_dist <= 100:
-                self.selected_roi = best_idx
-                self.selected_manual_roi = None
-                self.set_selected_state(0)
-                self.status.showMessage(f"Removed suite2p ROI {best_idx} from picked refs")
+                if self.remove_picked_suite2p_roi(best_idx):
+                    self.status.showMessage(f"Removed suite2p ROI {best_idx} from picked refs")
             return
         if best_idx is not None and best_dist <= 100:
             self.selected_roi = best_idx
@@ -970,18 +968,14 @@ class CurationWindow(QMainWindow):
         if button == Qt.MouseButton.RightButton:
             manual_idx = self.manual_roi_at(x, y)
             if manual_idx is not None:
-                self.selected_roi = None
-                self.selected_manual_roi = manual_idx
                 manual_id = self.added_rois[manual_idx].get("manual_roi_id")
-                self.delete_selected()
+                self.delete_manual_roi_at(manual_idx)
                 self.status.showMessage(f"Deleted manual ROI {manual_id}")
                 return
             suite_idx, suite_dist = self.nearest_selected_suite2p_roi(x, y)
             if suite_idx is not None and suite_dist <= 100:
-                self.selected_roi = suite_idx
-                self.selected_manual_roi = None
-                self.set_selected_state(0)
-                self.status.showMessage(f"Removed suite2p ROI {suite_idx} from picked refs")
+                if self.remove_picked_suite2p_roi(suite_idx):
+                    self.status.showMessage(f"Removed suite2p ROI {suite_idx} from picked refs")
                 return
         if mode == "draw freehand ROI":
             if button == Qt.MouseButton.LeftButton:
@@ -1005,24 +999,24 @@ class CurationWindow(QMainWindow):
         if mode == "select ROI":
             manual_idx = self.manual_roi_at(x, y)
             if manual_idx is not None:
-                self.selected_roi = None
-                self.selected_manual_roi = manual_idx
                 if button == Qt.MouseButton.RightButton:
                     manual_id = self.added_rois[manual_idx].get("manual_roi_id")
-                    self.delete_selected()
+                    self.delete_manual_roi_at(manual_idx)
                     self.status.showMessage(f"Deleted manual ROI {manual_id}")
                 else:
+                    self.selected_roi = None
+                    self.selected_manual_roi = manual_idx
                     self.refresh()
                     self.update_trace_plot()
                 return
             suite_idx, suite_dist = self.nearest_selected_suite2p_roi(x, y)
             if suite_idx is not None and suite_dist <= 100:
-                self.selected_roi = suite_idx
-                self.selected_manual_roi = None
                 if button == Qt.MouseButton.RightButton:
-                    self.set_selected_state(0)
-                    self.status.showMessage(f"Removed suite2p ROI {suite_idx} from picked refs")
+                    if self.remove_picked_suite2p_roi(suite_idx):
+                        self.status.showMessage(f"Removed suite2p ROI {suite_idx} from picked refs")
                 else:
+                    self.selected_roi = suite_idx
+                    self.selected_manual_roi = None
                     self.refresh()
                     self.update_trace_plot()
             return
@@ -1167,17 +1161,40 @@ class CurationWindow(QMainWindow):
         self.refresh()
         self.update_trace_plot()
 
+    def remove_picked_suite2p_roi(self, roi_idx: int) -> bool:
+        if roi_idx not in self.selected_suite2p_refs:
+            return False
+        self.push_undo("suite2p-unpick")
+        self.selected_suite2p_refs.discard(int(roi_idx))
+        if 0 <= roi_idx < len(self.iscell):
+            self.iscell[roi_idx, 0] = 0.0
+            self.iscell[roi_idx, 1] = 0.0
+        if self.selected_roi == roi_idx:
+            self.selected_roi = None
+        self.dirty = True
+        self.populate_roi_list()
+        self.refresh()
+        self.update_trace_plot()
+        return True
+
+    def delete_manual_roi_at(self, manual_idx: int) -> None:
+        if manual_idx < 0 or manual_idx >= len(self.added_rois):
+            return
+        self.push_undo("delete-manual")
+        removed = self.added_rois.pop(manual_idx)
+        if self.selected_manual_roi == manual_idx:
+            self.selected_manual_roi = None
+        elif self.selected_manual_roi is not None and self.selected_manual_roi > manual_idx:
+            self.selected_manual_roi -= 1
+        self.dirty = True
+        self.status.showMessage(f"Deleted manual ROI {removed.get('manual_roi_id')}")
+        self.populate_roi_list()
+        self.refresh()
+        self.update_trace_plot()
+
     def delete_selected(self) -> None:
         if self.selected_manual_roi is not None and 0 <= self.selected_manual_roi < len(self.added_rois):
-            self.push_undo("delete-manual")
-            removed = self.added_rois.pop(self.selected_manual_roi)
-            self.selected_manual_roi = None
-            self.selected_roi = None
-            self.dirty = True
-            self.status.showMessage(f"Deleted manual ROI {removed.get('manual_roi_id')}")
-            self.populate_roi_list()
-            self.refresh()
-            self.update_trace_plot()
+            self.delete_manual_roi_at(self.selected_manual_roi)
             return
         if self.selected_roi is None:
             return
