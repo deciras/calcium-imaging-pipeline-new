@@ -111,6 +111,11 @@ def find_trial_paths(data_root: Path, trial_id: str | None, movie_kind: str) -> 
 
 
 def find_movie_path(data_root: Path, trial_id: str, movie_kind: str) -> Path:
+    if movie_kind == "raw":
+        root = data_root / "01_oir_to_tif" / trial_id
+        matches = sorted(root.glob("*_Max_Proj.tif"))
+        if matches:
+            return matches[0]
     if movie_kind == "spatial-highpass":
         root = data_root / "04_spatial_highpass" / trial_id
         matches = sorted(root.glob("*_spatial_highpass_movie.tif"))
@@ -126,15 +131,23 @@ def find_movie_path(data_root: Path, trial_id: str, movie_kind: str) -> Path:
 
 def discover_trial_ids(data_root: Path, movie_kind: str) -> list[str]:
     roots: list[Path] = []
+    if movie_kind == "raw":
+        roots.append(data_root / "01_oir_to_tif")
     if movie_kind == "spatial-highpass":
         roots.append(data_root / "04_spatial_highpass")
-    roots.append(data_root / "03_motion_correct")
+    if movie_kind in {"corrected", "spatial-highpass"}:
+        roots.append(data_root / "03_motion_correct")
     trial_ids: list[str] = []
     seen: set[str] = set()
     for root in roots:
         if not root.exists():
             continue
-        pattern = "*_spatial_highpass_movie.tif" if root.name == "04_spatial_highpass" else "*_corrected_movie.tif"
+        if root.name == "01_oir_to_tif":
+            pattern = "*_Max_Proj.tif"
+        elif root.name == "04_spatial_highpass":
+            pattern = "*_spatial_highpass_movie.tif"
+        else:
+            pattern = "*_corrected_movie.tif"
         for movie in sorted(root.glob(f"*/{pattern}")):
             trial_id = movie.parent.name
             if trial_id not in seen:
@@ -467,6 +480,15 @@ class CurationWindow(QMainWindow):
         self.roi_list = QListWidget()
         self.roi_list.currentRowChanged.connect(self.select_roi_from_list)
 
+        self.movie_kind_combo = QComboBox()
+        self.movie_kind_combo.addItem("raw (01 converted TIFF)", "raw")
+        self.movie_kind_combo.addItem("motion corrected (03)", "corrected")
+        self.movie_kind_combo.addItem("spatial high-pass (04)", "spatial-highpass")
+        combo_index = self.movie_kind_combo.findData(movie_kind)
+        if combo_index >= 0:
+            self.movie_kind_combo.setCurrentIndex(combo_index)
+        self.movie_kind_combo.currentIndexChanged.connect(self.change_movie_kind)
+
         self.trial_list = QListWidget()
         self.trial_list.setMaximumHeight(130)
         for trial_id in self.trial_ids:
@@ -516,6 +538,8 @@ class CurationWindow(QMainWindow):
         self.setStatusBar(self.status)
 
         controls = QVBoxLayout()
+        controls.addWidget(QLabel("Movie source"))
+        controls.addWidget(self.movie_kind_combo)
         controls.addWidget(QLabel("Files"))
         controls.addWidget(self.trial_list)
         controls.addWidget(load_trial_btn)
@@ -632,6 +656,38 @@ class CurationWindow(QMainWindow):
             self.load_suite2p_refs()
         self.refresh()
 
+    def refresh_trial_list(self, selected_trial_id: str | None = None) -> None:
+        self.trial_ids = discover_trial_ids(self.data_root, self.movie_kind)
+        self.trial_list.blockSignals(True)
+        self.trial_list.clear()
+        for trial_id in self.trial_ids:
+            item = QListWidgetItem(trial_id)
+            self.trial_list.addItem(item)
+            if selected_trial_id == trial_id:
+                self.trial_list.setCurrentItem(item)
+        if self.trial_list.currentRow() < 0 and self.trial_list.count() > 0:
+            self.trial_list.setCurrentRow(0)
+        self.trial_list.blockSignals(False)
+
+    def change_movie_kind(self) -> None:
+        new_kind = self.movie_kind_combo.currentData()
+        if new_kind == self.movie_kind:
+            return
+        if not self.maybe_save_before_switch():
+            old_index = self.movie_kind_combo.findData(self.movie_kind)
+            if old_index >= 0:
+                self.movie_kind_combo.blockSignals(True)
+                self.movie_kind_combo.setCurrentIndex(old_index)
+                self.movie_kind_combo.blockSignals(False)
+            return
+        self.movie_kind = str(new_kind)
+        self.refresh_trial_list(selected_trial_id=self.paths.trial_id)
+        if not self.trial_ids:
+            QMessageBox.warning(self, "Movie source", f"No {self.movie_kind} movies found under:\n{self.data_root}")
+            return
+        target = self.paths.trial_id if self.paths.trial_id in self.trial_ids else self.trial_ids[0]
+        self.load_trial_id(target, already_checked=True)
+
     def load_suite2p_refs(self) -> None:
         if self.paths.stat_path is None or not self.paths.stat_path.exists():
             self.show_suite2p.blockSignals(True)
@@ -686,10 +742,15 @@ class CurationWindow(QMainWindow):
         self.trial_list.setCurrentRow(next_idx)
         self.load_trial_id(self.trial_ids[next_idx])
 
-    def load_trial_id(self, trial_id: str) -> None:
+    def load_trial_id(self, trial_id: str, already_checked: bool = False) -> None:
         if trial_id == self.paths.trial_id:
-            return
-        if not self.maybe_save_before_switch():
+            try:
+                new_movie_path = find_movie_path(self.data_root, trial_id, self.movie_kind)
+            except Exception:
+                new_movie_path = None
+            if new_movie_path == self.paths.movie_path:
+                return
+        if not already_checked and not self.maybe_save_before_switch():
             return
         try:
             paths = find_trial_paths(self.data_root, trial_id, self.movie_kind)
@@ -1474,7 +1535,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Open a local ROI curation GUI.")
     parser.add_argument("--data-root", type=Path)
     parser.add_argument("--trial-id", help="Trial folder name. Defaults to the first available suite2p trial.")
-    parser.add_argument("--movie-kind", choices=("corrected", "spatial-highpass"), default="corrected")
+    parser.add_argument("--movie-kind", choices=("raw", "corrected", "spatial-highpass"), default="corrected")
     parser.add_argument("--neuropil-coeff", type=float, default=0.7)
     parser.add_argument("--f0-percentile", type=float, default=10.0)
     parser.add_argument("--f0-eps", type=float, default=1e-6)

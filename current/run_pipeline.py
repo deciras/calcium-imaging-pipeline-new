@@ -1127,7 +1127,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--trial-id", default=None, help="Step 05e: trial folder name to open in the manual ROI curation GUI.")
     parser.add_argument(
         "--movie-kind",
-        choices=("corrected", "spatial-highpass"),
+        choices=("raw", "corrected", "spatial-highpass"),
         default=None,
         help="Step 05e: movie shown in the manual ROI curation GUI.",
     )

@@ -414,6 +414,7 @@ Linux 工作站也是同样格式，只需要把 `--data-root` 改成工作站�
 
 窗口里：
 
+- `Movie source`：可以在 raw / motion corrected / spatial high-pass 之间切换
 - `Files`：显示当前数据根目录里找到的 trial；可用 `Load selected` 或 `Next` 切换
 - 右侧控制区可以上下滚动，屏幕较小时按钮不会被挤出窗口
 - 左边：默认只显示视频，不显示 suite2p ROI
@@ -460,6 +461,9 @@ DATA_ROOT/05e_roi_manual_curation/<trial>/
 
 注意：
 
+- `--movie-kind raw` 打开 01 转出的 `*_Max_Proj.tif`
+- `--movie-kind corrected` 打开 03 运动矫正后的 `*_corrected_movie.tif`
+- `--movie-kind spatial-highpass` 打开 04 空间高通滤波后的 `*_spatial_highpass_movie.tif`
 - 手动画的新 ROI 现在支持 freehand 和椭圆
 - freehand 模式线条更细，适合数位板
 - suite2p ROI 显示为原本的像素边界，不再简化成圆圈

@@ -24,6 +24,10 @@ Linux 工作站上也用同一套命令。只需要把 `--data-root` 改成 Linu
 
 ## 窗口怎么看
 
+- `Movie source`：选择当前查看的图像来源：
+  - `raw (01 converted TIFF)`：01 转出的主成像 TIFF，文件名通常是 `*_Max_Proj.tif`
+  - `motion corrected (03)`：03 运动矫正后的 movie
+  - `spatial high-pass (04)`：04 空间高通滤波后的 movie
 - `Files`：显示当前数据根目录里找到的 trial。可以点 `Load selected` 打开选中的 trial，也可以点 `Next` 切到下一个。
 - 右侧控制区可以上下滚动，屏幕较小时按钮不会被挤出窗口。
 - 左边窗口：默认只显示视频，不显示 suite2p ROI。
