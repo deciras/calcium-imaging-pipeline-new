@@ -976,6 +976,13 @@ class CurationWindow(QMainWindow):
                 self.delete_selected()
                 self.status.showMessage(f"Deleted manual ROI {manual_id}")
                 return
+            suite_idx, suite_dist = self.nearest_selected_suite2p_roi(x, y)
+            if suite_idx is not None and suite_dist <= 100:
+                self.selected_roi = suite_idx
+                self.selected_manual_roi = None
+                self.set_selected_state(0)
+                self.status.showMessage(f"Removed suite2p ROI {suite_idx} from picked refs")
+                return
         if mode == "draw freehand ROI":
             if button == Qt.MouseButton.LeftButton:
                 self.current_polygon = [(float(x), float(y))]

@@ -48,7 +48,7 @@ Linux 工作站上也用同一套命令。只需要把 `--data-root` 改成 Linu
 
 这个操作不会改 suite2p 原始文件，只会另存一个新的人工 ROI set。
 
-选中的 suite2p ROI 会出现在右边窗口。右边也可以点选这些 ROI，右键可以从最终 ROI set 里移除。右边手画的 ROI 也可以右键直接删除；这个操作不需要先切回 `select ROI` 模式。
+选中的 suite2p ROI 会出现在右边窗口。右边也可以点选这些 ROI，右键可以从最终 ROI set 里移除。右边手画的 ROI 也可以右键直接删除；这些操作不需要先切回 `select ROI` 模式。
 
 `reject` 和 `delete` 主要用于手动画 ROI：
 
