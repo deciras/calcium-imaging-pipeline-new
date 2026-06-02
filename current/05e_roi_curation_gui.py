@@ -879,6 +879,23 @@ class CurationWindow(QMainWindow):
                 best_idx = idx
         return best_idx, best_dist
 
+    def nearest_selected_suite2p_roi(self, x: float, y: float) -> tuple[int | None, float]:
+        best_idx = None
+        best_dist = float("inf")
+        for idx in sorted(self.selected_suite2p_refs):
+            if idx in self.deleted_existing or idx >= len(self.roi_cache):
+                continue
+            roi = self.roi_cache[idx]
+            ypix = np.asarray(roi.get("ypix", []), dtype=float)
+            xpix = np.asarray(roi.get("xpix", []), dtype=float)
+            if ypix.size == 0:
+                continue
+            dist = float(np.min((xpix - x) ** 2 + (ypix - y) ** 2))
+            if dist < best_dist:
+                best_dist = dist
+                best_idx = idx
+        return best_idx, best_dist
+
     def manual_roi_at(self, x: float, y: float) -> int | None:
         for idx in range(len(self.added_rois) - 1, -1, -1):
             roi = self.added_rois[idx]
@@ -918,6 +935,17 @@ class CurationWindow(QMainWindow):
                 if button == Qt.MouseButton.RightButton:
                     self.set_selected_state(0)
                     self.status.showMessage(f"Rejected manual ROI {self.added_rois[manual_idx].get('manual_roi_id')}")
+                else:
+                    self.refresh()
+                    self.update_trace_plot()
+                return
+            suite_idx, suite_dist = self.nearest_selected_suite2p_roi(x, y)
+            if suite_idx is not None and suite_dist <= 100:
+                self.selected_roi = suite_idx
+                self.selected_manual_roi = None
+                if button == Qt.MouseButton.RightButton:
+                    self.set_selected_state(0)
+                    self.status.showMessage(f"Removed suite2p ROI {suite_idx} from picked refs")
                 else:
                     self.refresh()
                     self.update_trace_plot()
@@ -1168,20 +1196,22 @@ class CurationWindow(QMainWindow):
         dff, _ = robust_dff(fcorr, self.f0_percentile, self.f0_eps)
         self.trace_canvas.plot_traces(f"suite2p ROI {self.selected_roi}", f, fneu, fcorr, dff)
 
-    def frame_pixmap(self, overlay: bool) -> QPixmap:
+    def frame_pixmap(self, view: str) -> QPixmap:
         frame = normalize_frame(self.movie[self.frame_index], self.low_pct, self.high_pct)
         height, width = frame.shape
         qimg = QImage(frame.data, width, height, width, QImage.Format.Format_Grayscale8).copy()
         pixmap = QPixmap.fromImage(qimg)
         painter = QPainter(pixmap)
-        if overlay:
-            self.paint_rois(painter)
+        if view == "reference":
+            self.paint_suite2p_rois(painter, selected_only=False)
+        elif view == "edit":
+            self.paint_suite2p_rois(painter, selected_only=True)
         self.paint_added_rois(painter)
         self.paint_current_polygon(painter)
         painter.end()
         return pixmap
 
-    def paint_rois(self, painter: QPainter) -> None:
+    def paint_suite2p_rois(self, painter: QPainter, selected_only: bool) -> None:
         if not self.show_suite2p_refs:
             return
         for idx, roi in enumerate(self.roi_cache):
@@ -1190,6 +1220,8 @@ class CurationWindow(QMainWindow):
             if idx < len(self.suite2p_ref_flags) and not self.suite2p_ref_flags[idx] and not self.show_rejected.isChecked():
                 continue
             keep = idx in self.selected_suite2p_refs
+            if selected_only and not keep:
+                continue
             ypix = np.asarray(roi.get("boundary_ypix", []), dtype=np.int32)
             xpix = np.asarray(roi.get("boundary_xpix", []), dtype=np.int32)
             if ypix.size == 0:
@@ -1241,8 +1273,8 @@ class CurationWindow(QMainWindow):
 
     def refresh(self) -> None:
         shape = (self.movie.shape[-2], self.movie.shape[-1])
-        self.left_canvas.set_rendered_pixmap(self.frame_pixmap(overlay=True), shape)
-        self.right_canvas.set_rendered_pixmap(self.frame_pixmap(overlay=False), shape)
+        self.left_canvas.set_rendered_pixmap(self.frame_pixmap(view="reference"), shape)
+        self.right_canvas.set_rendered_pixmap(self.frame_pixmap(view="edit"), shape)
         kept = int(len(self.selected_suite2p_refs))
         self.status.showMessage(
             f"trial={self.paths.trial_id} | frame={self.frame_index}/{self.movie.shape[0]-1} | "
