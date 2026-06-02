@@ -967,6 +967,15 @@ class CurationWindow(QMainWindow):
 
     def handle_right_click(self, x: float, y: float, button: int) -> None:
         mode = self.mode_combo.currentText()
+        if button == Qt.MouseButton.RightButton:
+            manual_idx = self.manual_roi_at(x, y)
+            if manual_idx is not None:
+                self.selected_roi = None
+                self.selected_manual_roi = manual_idx
+                manual_id = self.added_rois[manual_idx].get("manual_roi_id")
+                self.delete_selected()
+                self.status.showMessage(f"Deleted manual ROI {manual_id}")
+                return
         if mode == "draw freehand ROI":
             if button == Qt.MouseButton.LeftButton:
                 self.current_polygon = [(float(x), float(y))]
@@ -1325,9 +1334,6 @@ class CurationWindow(QMainWindow):
         pen.setWidth(1)
         painter.setPen(pen)
         points = [QPointF(float(x), float(y)) for x, y in self.current_polygon]
-        if self.mode_combo.currentText() != "draw freehand ROI":
-            for point in points:
-                painter.drawEllipse(point, 2.0, 2.0)
         for p0, p1 in zip(points, points[1:]):
             painter.drawLine(p0, p1)
 

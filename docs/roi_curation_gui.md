@@ -48,7 +48,7 @@ Linux 工作站上也用同一套命令。只需要把 `--data-root` 改成 Linu
 
 这个操作不会改 suite2p 原始文件，只会另存一个新的人工 ROI set。
 
-选中的 suite2p ROI 会出现在右边窗口。右边也可以点选这些 ROI，右键可以从最终 ROI set 里移除。右边手画的 ROI 也可以右键直接删除。
+选中的 suite2p ROI 会出现在右边窗口。右边也可以点选这些 ROI，右键可以从最终 ROI set 里移除。右边手画的 ROI 也可以右键直接删除；这个操作不需要先切回 `select ROI` 模式。
 
 `reject` 和 `delete` 主要用于手动画 ROI：
 
@@ -87,7 +87,7 @@ Linux 工作站上也用同一套命令。只需要把 `--data-root` 改成 Linu
 3. 松开后自动生成 ROI。
 4. Trace 图会立刻显示这个椭圆 ROI 的信号。
 
-手画 ROI 是 freehand 轨迹或椭圆，不是圆形。新 ROI 的 neuropil 先用 ROI 周围一圈像素近似估计，所以可以马上看 `F - 0.7Fneu` 和 dF/F。
+手画 ROI 是 freehand 轨迹或椭圆，不是圆形。freehand 和椭圆的预览线都用细线显示。新 ROI 的 neuropil 先用 ROI 周围一圈像素近似估计，所以可以马上看 `F - 0.7Fneu` 和 dF/F。
 
 ## 保存了什么
 

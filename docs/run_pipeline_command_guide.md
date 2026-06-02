@@ -422,7 +422,7 @@ Linux 工作站也是同样格式，只需要把 `--data-root` 改成工作站�
 - suite2p 未选中的参考 ROI 是较细的半透明橙色，选中的参考 ROI 是绿色
 - 左边单击 suite2p ROI：只查看 trace
 - 左边双击 suite2p ROI：加入/移出最终人工 ROI set
-- 右边显示最终会保存的 ROI；可以在右边点选手画 ROI 或已选 suite2p ROI，右键直接删除/移除
+- 右边显示最终会保存的 ROI；可以在右边点选手画 ROI 或已选 suite2p ROI，右键直接删除/移除。右键删除手画 ROI 不需要先切回 `select ROI` 模式
 - 右边：切到 `draw freehand ROI` 后，可以按住鼠标或数位板笔直接圈画，松开后自动生成 ROI
 - 右边：切到 `draw ellipse ROI` 后，可以拖出一个椭圆 ROI
 - 下方 `Play/Pause`：播放或暂停 movie；旁边 `fps` 可以调播放速度
@@ -470,7 +470,7 @@ DATA_ROOT/05e_roi_manual_curation/<trial>/
 - `--movie-kind corrected` 打开 03 运动矫正后的 `*_corrected_movie.tif`
 - `--movie-kind spatial-highpass` 打开 04 空间高通滤波后的 `*_spatial_highpass_movie.tif`
 - 手动画的新 ROI 现在支持 freehand 和椭圆
-- freehand 模式线条更细，适合数位板
+- freehand 和椭圆预览都用细线，适合数位板
 - suite2p ROI 显示为原本的像素边界，不再简化成圆圈
 - suite2p ROI 默认不显示，需要时才作为参考层打开；最后只保存被选中的 suite2p ROI
 - 切换 trial 或退出前，如果有未保存修改，会提示是否保存
