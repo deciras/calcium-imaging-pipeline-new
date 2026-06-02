@@ -422,7 +422,7 @@ Linux 工作站也是同样格式，只需要把 `--data-root` 改成工作站�
 - suite2p 未选中的参考 ROI 是较细的半透明橙色，选中的参考 ROI 是绿色
 - 左边单击 suite2p ROI：只查看 trace
 - 左边双击 suite2p ROI：加入/移出最终人工 ROI set
-- 右边显示最终会保存的 ROI；可以在右边点选手画 ROI 或已选 suite2p ROI，右键 reject/移除
+- 右边显示最终会保存的 ROI；可以在右边点选手画 ROI 或已选 suite2p ROI，右键直接删除/移除
 - 右边：切到 `draw freehand ROI` 后，可以按住鼠标或数位板笔直接圈画，松开后自动生成 ROI
 - 右边：切到 `draw ellipse ROI` 后，可以拖出一个椭圆 ROI
 - `Keep selected` / `Reject selected`：保留或标记不用当前 ROI

@@ -933,8 +933,9 @@ class CurationWindow(QMainWindow):
                 self.selected_roi = None
                 self.selected_manual_roi = manual_idx
                 if button == Qt.MouseButton.RightButton:
-                    self.set_selected_state(0)
-                    self.status.showMessage(f"Rejected manual ROI {self.added_rois[manual_idx].get('manual_roi_id')}")
+                    manual_id = self.added_rois[manual_idx].get("manual_roi_id")
+                    self.delete_selected()
+                    self.status.showMessage(f"Deleted manual ROI {manual_id}")
                 else:
                     self.refresh()
                     self.update_trace_plot()
