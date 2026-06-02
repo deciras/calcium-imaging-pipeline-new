@@ -44,7 +44,7 @@ Linux 工作站上也用同一套命令。只需要把 `--data-root` 改成 Linu
 Trace 来源：
 
 - suite2p ROI 的 trace 直接来自 suite2p 输出的 `F.npy` 和 `Fneu.npy`。
-- 手画 ROI 的 trace 固定从 suite2p 主线使用的底片计算：优先用 `04_spatial_highpass`，如果没有则回退到 `03_motion_correct`。
+- 手画 ROI 的 trace 固定从 motion-corrected 底片计算；如果没有 `03_motion_correct`，才回退到当前显示底片。
 - 因此切换当前显示的 `Movie source` 或调 brightness/contrast，只影响你看图，不会改变 trace。
 
 ## 怎么从 suite2p 里捡 ROI
@@ -99,7 +99,7 @@ Trace 来源：
 3. 松开后自动生成 ROI。
 4. Trace 图会立刻显示这个椭圆 ROI 的信号。
 
-手画 ROI 是 freehand 轨迹或椭圆，不是圆形。freehand 和椭圆的预览线都用细线显示。新 ROI 的 neuropil 先用 ROI 周围一圈像素近似估计，所以可以马上看 `F - 0.7Fneu` 和 dF/F。
+手画 ROI 是 freehand 轨迹或椭圆，不是圆形。freehand 和椭圆的预览线都用细线显示。新 ROI 只把形状和位置当作人工结果；trace、Fneu 和 dF/F 会重新计算。当前 Fneu 用 ROI 周围一圈像素近似估计，所以可以马上看 `F - 0.7Fneu` 和 dF/F。
 
 ## 保存了什么
 
@@ -129,4 +129,4 @@ DATA_ROOT/05e_roi_manual_curation/<trial>/
 
 - 这一版 05e 先负责人工校对和保存结果。
 - 06 还没有默认读取 05e 的手画新 ROI；下一步可以把 05e 输出接进 06。
-- 手画 ROI 的 neuropil 是近似值，用来辅助判断 trace，不等同于 suite2p 的 neuropil mask。
+- 手画 ROI 的 neuropil 是近似值，用来辅助判断 trace，不等同于 suite2p 的完整 neuropil mask；旧校对结果重新加载时只保留 ROI 形状和位置，trace / Fneu / dF/F 会重新计算。

@@ -222,7 +222,7 @@ python3 current/run_pipeline.py \
 
 说明：
 
-- 05 默认优先读取 `04_spatial_highpass/`，没有 04 时才读取 `03_motion_correct/`
+- 05 默认读取 `03_motion_correct/`。`04_spatial_highpass/` 可以作为 GUI 显示/辅助看边界的底片，但不再作为 suite2p 默认输入。
 - `--threshold-scaling` 越大，ROI 检测越保守，通常 ROI 会更少
 - `--cell-diameter-um 5` 使用当前估计的细胞直径
 - `--diameter-scale 1.2` 会让 suite2p 的检测直径略大于按像素尺寸换算出的 5 um
@@ -436,7 +436,7 @@ Linux 工作站也是同样格式，只需要把 `--data-root` 改成工作站�
 Trace 来源：
 
 - suite2p ROI 的 trace 直接来自 suite2p 输出的 `F.npy` 和 `Fneu.npy`
-- 手画 ROI 的 trace 固定从 suite2p 主线使用的底片计算：优先用 `04_spatial_highpass`，如果没有则回退到 `03_motion_correct`
+- 手画 ROI 的 trace 固定从 motion-corrected 底片计算；如果没有 `03_motion_correct`，才回退到当前显示底片
 - 切换当前显示的 `Movie source` 或调 brightness/contrast，只影响看图，不会改变 trace
 
 快捷键：
@@ -487,7 +487,7 @@ DATA_ROOT/05e_roi_manual_curation/<trial>/
 - suite2p ROI 默认不显示，需要时才作为参考层打开；最后只保存被选中的 suite2p ROI
 - 切换 trial 或退出前，如果有未保存修改，会提示是否保存
 - `reject` 表示保留记录但后续不用；`delete` 表示从人工 ROI set 中移除
-- 手画 ROI 的 neuropil 是用 ROI 周围一圈像素近似估计的，适合人工判断 trace 是否像细胞
+- 手画 ROI 只保留形状和位置；trace、Fneu 和 dF/F 会重新计算。当前 Fneu 使用 ROI 周围一圈像素近似估计，后续可以进一步做成更接近 suite2p 的 neuropil mask。
 - 播放控制已经接入 GUI，可以边播放 movie 边校对 ROI
 - 这一版 05e 先负责“校对和保存”，还没有自动接入 06；后续可以让 06 优先读取 05e 的人工校对结果
 - 05e 可以逐步发展成主力手动 ROI 标注工具；suite2p 可以只作为可选预标注

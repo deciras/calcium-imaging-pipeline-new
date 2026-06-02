@@ -825,7 +825,7 @@ class CurationWindow(QMainWindow):
         self.added_rois = refreshed
 
     def default_trace_movie_path(self, paths: TrialPaths) -> Path:
-        for kind in ("spatial-highpass", "corrected"):
+        for kind in ("corrected", "raw"):
             try:
                 return find_movie_path(self.data_root, paths.trial_id, kind)
             except Exception:
@@ -858,16 +858,29 @@ class CurationWindow(QMainWindow):
     def load_saved_curation_if_present(self) -> None:
         out_dir = self.paths.output_dir
         additions_path = out_dir / f"{self.paths.trial_id}_manual_added_rois.json"
+        roi_set_path = out_dir / f"{self.paths.trial_id}_manual_roi_set.json"
         selected_path = out_dir / f"{self.paths.trial_id}_selected_suite2p_indices.csv"
         deleted_path = out_dir / f"{self.paths.trial_id}_deleted_suite2p_indices.csv"
         loaded_parts: list[str] = []
 
+        saved_roi_set = self.load_saved_roi_set(roi_set_path)
+        saved_suite2p_points = self.saved_suite2p_points_by_id(saved_roi_set)
         selected_refs = read_index_csv(selected_path)
         deleted_refs = read_index_csv(deleted_path)
+        valid_selected: set[int] = set()
+        invalid_selected: set[int] = set()
         if selected_refs or deleted_refs:
             if not self.suite2p_loaded:
                 self.load_suite2p_refs()
-            valid_selected = {idx for idx in selected_refs if 0 <= idx < len(self.iscell)}
+            for idx in selected_refs:
+                if 0 <= idx < len(self.iscell):
+                    saved_points = saved_suite2p_points.get(idx)
+                    if saved_points is None or self.saved_suite2p_shape_matches_current(idx, saved_points):
+                        valid_selected.add(idx)
+                    else:
+                        invalid_selected.add(idx)
+                else:
+                    invalid_selected.add(idx)
             valid_deleted = {idx for idx in deleted_refs if idx >= 0}
             self.selected_suite2p_refs = valid_selected
             self.deleted_existing = valid_deleted
@@ -902,12 +915,104 @@ class CurationWindow(QMainWindow):
                 self.added_rois.append(roi)
             loaded_parts.append(f"{len(self.added_rois)} manual ROI(s)")
 
+        imported = self.import_saved_suite2p_picks_as_manual(saved_roi_set, valid_selected | invalid_selected)
+        if imported:
+            loaded_parts.append(f"{imported} imported old suite2p ROI(s)")
+
         if loaded_parts:
             self.dirty = False
             self.undo_stack = []
             self.selected_roi = None
             self.selected_manual_roi = None
             self.status.showMessage("Loaded saved curation: " + ", ".join(loaded_parts))
+
+    def load_saved_roi_set(self, roi_set_path: Path) -> list[dict]:
+        if not roi_set_path.exists():
+            return []
+        try:
+            with roi_set_path.open("r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except Exception:
+            return []
+        return payload if isinstance(payload, list) else []
+
+    def saved_suite2p_points_by_id(self, saved_roi_set: list[dict]) -> dict[int, list[tuple[float, float]]]:
+        points_by_id: dict[int, list[tuple[float, float]]] = {}
+        for saved in saved_roi_set:
+            if saved.get("roi_source") != "suite2p_reference":
+                continue
+            try:
+                original_id = int(saved.get("suite2p_original_id"))
+            except (TypeError, ValueError):
+                continue
+            points = [(float(x), float(y)) for x, y in saved.get("points", [])]
+            if len(points) >= 3:
+                points_by_id[original_id] = points
+        return points_by_id
+
+    def saved_suite2p_shape_matches_current(self, roi_idx: int, saved_points: list[tuple[float, float]]) -> bool:
+        if roi_idx < 0 or roi_idx >= len(self.roi_cache):
+            return False
+        current = self.roi_cache[roi_idx]
+        ypix = np.asarray(current.get("ypix", []), dtype=np.int32)
+        xpix = np.asarray(current.get("xpix", []), dtype=np.int32)
+        if ypix.size == 0 or xpix.size == 0:
+            return False
+        current_mask = np.zeros(self.movie.shape[-2:], dtype=bool)
+        current_mask[ypix, xpix] = True
+        saved_mask = polygon_mask(saved_points, self.movie.shape[-2:])
+        intersection = int(np.logical_and(current_mask, saved_mask).sum())
+        union = int(np.logical_or(current_mask, saved_mask).sum())
+        if union == 0:
+            return False
+        return (intersection / union) >= 0.5
+
+    def import_saved_suite2p_picks_as_manual(self, saved_roi_set: list[dict], selected_refs: set[int]) -> int:
+        if not saved_roi_set:
+            return 0
+        existing_imports = {
+            int(roi.get("suite2p_original_id"))
+            for roi in self.added_rois
+            if roi.get("roi_source") == "suite2p_reference_imported" and roi.get("suite2p_original_id") is not None
+        }
+        imported = 0
+        for saved in saved_roi_set:
+            if saved.get("roi_source") != "suite2p_reference":
+                continue
+            original_id = saved.get("suite2p_original_id")
+            try:
+                original_id_int = int(original_id)
+            except (TypeError, ValueError):
+                continue
+            if original_id_int in self.selected_suite2p_refs or original_id_int in existing_imports:
+                continue
+            if selected_refs and original_id_int not in selected_refs:
+                continue
+            points = [(float(x), float(y)) for x, y in saved.get("points", [])]
+            if len(points) < 3:
+                continue
+            mask = polygon_mask(points, self.movie.shape[-2:])
+            if int(mask.sum()) < 3:
+                continue
+            roi = self.build_manual_roi(mask)
+            roi.update(
+                {
+                    "manual_roi_id": self.next_manual_roi_id(),
+                    "roi_type": "imported_suite2p",
+                    "roi_source": "suite2p_reference_imported",
+                    "status": "accepted",
+                    "points": [[float(x), float(y)] for x, y in points],
+                    "suite2p_original_id": original_id_int,
+                }
+            )
+            self.added_rois.append(roi)
+            existing_imports.add(original_id_int)
+            imported += 1
+        return imported
+
+    def next_manual_roi_id(self) -> int:
+        existing = [int(roi.get("manual_roi_id", 0)) for roi in self.added_rois]
+        return max(existing, default=0) + 1
 
     def maybe_save_before_switch(self) -> bool:
         if not self.dirty:
@@ -1776,6 +1881,7 @@ class CurationWindow(QMainWindow):
                     "n_pixels": int(len(xpix)),
                     "x_mean": float(np.mean(xpix)) if xpix.size else None,
                     "y_mean": float(np.mean(ypix)) if ypix.size else None,
+                    "points": [[float(x), float(y)] for x, y in points],
                 }
             )
         trace_rows = []
@@ -1859,7 +1965,7 @@ class CurationWindow(QMainWindow):
             "note": (
                 "The saved manual ROI set contains accepted manual ROIs plus selected "
                 "suite2p reference ROIs only. Suite2p source files are not edited in place. "
-                "Manual ROI traces use the suite2p input movie when available, while "
+                "Manual ROI traces use the motion-corrected movie when available, while "
                 "brightness/contrast controls affect display only."
             ),
         }
