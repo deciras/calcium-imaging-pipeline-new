@@ -34,6 +34,7 @@ Linux 工作站上也用同一套命令。只需要把 `--data-root` 改成 Linu
 - 右侧控制区可以上下滚动，屏幕较小时按钮不会被挤出窗口。
 - 左边窗口：默认只显示视频，不显示 suite2p ROI。
 - `show suite2p refs`：需要参考 suite2p 时再打开；打开时才读取 suite2p ROI。默认只显示 suite2p 原本 accepted 的 ROI；勾选 `show rejected` 才显示 rejected ROI。未选中的参考 ROI 是较细的半透明橙色，选中的参考 ROI 是绿色，当前查看的是黄色。
+- `show final ROIs on right`：只控制右边最终 ROI set 是否显示。关掉后，右边会只显示底片和当前正在画的线；已选 ROI 不会丢，只是暂时隐藏。
 - 右边窗口：显示最终会保存的 ROI，也就是手画 ROI 和已经选中的 suite2p ROI。
 - 右边窗口：切到 `draw freehand ROI` 后，可以按住鼠标或数位板笔直接圈画 ROI。
 - 右边窗口：切到 `draw ellipse ROI` 后，可以拖出一个椭圆 ROI。
@@ -56,7 +57,9 @@ Trace 来源：
 
 这个操作不会改 suite2p 原始文件，只会另存一个新的人工 ROI set。
 
-选中的 suite2p ROI 会出现在右边窗口。右边也可以点选这些 ROI，右键可以从最终 ROI set 里移除。右边手画的 ROI 也可以右键直接删除；右键会直接处理点到的 ROI，不需要先选中，也不需要先切回 `select ROI` 模式。
+选中的 suite2p ROI 会出现在右边窗口，即使左边的 `show suite2p refs` 关掉也会保留显示。右边也可以点选这些 ROI，右键可以从最终 ROI set 里移除。右边手画的 ROI 也可以右键直接删除；右键会直接处理点到的 ROI，不需要先选中，也不需要先切回 `select ROI` 模式。
+
+如果关掉 `show final ROIs on right`，右边已有 ROI 会暂时隐藏，鼠标也不会点中这些隐藏 ROI，避免误删。
 
 `reject` 和 `delete` 主要用于手动画 ROI：
 

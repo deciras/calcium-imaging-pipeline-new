@@ -560,6 +560,10 @@ class CurationWindow(QMainWindow):
         self.show_suite2p.setChecked(False)
         self.show_suite2p.stateChanged.connect(self.toggle_suite2p_refs)
 
+        self.show_final_rois = QCheckBox("show final ROIs on right")
+        self.show_final_rois.setChecked(True)
+        self.show_final_rois.stateChanged.connect(lambda _: self.refresh())
+
         self.mode_combo = QComboBox()
         self.mode_combo.addItems(["select ROI", "draw freehand ROI", "draw ellipse ROI"])
         self.mode_combo.currentIndexChanged.connect(lambda _: self.refresh())
@@ -613,6 +617,7 @@ class CurationWindow(QMainWindow):
         controls.addWidget(self.roi_list)
         controls.addWidget(self.show_rejected)
         controls.addWidget(self.show_suite2p)
+        controls.addWidget(self.show_final_rois)
         controls.addWidget(keep_btn)
         controls.addWidget(reject_btn)
         controls.addWidget(delete_btn)
@@ -1278,7 +1283,8 @@ class CurationWindow(QMainWindow):
 
     def handle_right_click(self, x: float, y: float, button: int) -> None:
         mode = self.mode_combo.currentText()
-        if button == Qt.MouseButton.RightButton:
+        final_rois_visible = self.show_final_rois.isChecked()
+        if button == Qt.MouseButton.RightButton and final_rois_visible:
             manual_idx = self.manual_roi_at(x, y)
             if manual_idx is not None:
                 manual_id = self.added_rois[manual_idx].get("manual_roi_id")
@@ -1310,6 +1316,8 @@ class CurationWindow(QMainWindow):
         if mode != "select ROI":
             return
         if mode == "select ROI":
+            if not final_rois_visible:
+                return
             manual_idx = self.manual_roi_at(x, y)
             if manual_idx is not None:
                 if button == Qt.MouseButton.RightButton:
@@ -1616,13 +1624,17 @@ class CurationWindow(QMainWindow):
             self.paint_suite2p_rois(painter, selected_only=False)
         elif view == "edit":
             self.paint_suite2p_rois(painter, selected_only=True)
-        self.paint_added_rois(painter)
+        if view != "edit" or self.show_final_rois.isChecked():
+            self.paint_added_rois(painter)
         self.paint_current_polygon(painter)
         painter.end()
         return pixmap
 
     def paint_suite2p_rois(self, painter: QPainter, selected_only: bool) -> None:
-        if not self.show_suite2p_refs:
+        if selected_only:
+            if not self.show_final_rois.isChecked():
+                return
+        elif not self.show_suite2p_refs:
             return
         for idx, roi in enumerate(self.roi_cache):
             if idx in self.deleted_existing:

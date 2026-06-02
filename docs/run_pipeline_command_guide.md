@@ -421,10 +421,11 @@ Linux 工作站也是同样格式，只需要把 `--data-root` 改成工作站�
 - 右侧控制区可以上下滚动，屏幕较小时按钮不会被挤出窗口
 - 左边：默认只显示视频，不显示 suite2p ROI
 - `show suite2p refs`：需要参考 suite2p 时再打开；打开时才读取 suite2p ROI；默认只显示 suite2p 原本 accepted 的 ROI，勾选 `show rejected` 才显示 rejected ROI
+- `show final ROIs on right`：只控制右边最终 ROI set 是否显示；关掉后 ROI 不会丢，只是右边暂时隐藏
 - suite2p 未选中的参考 ROI 是较细的半透明橙色，选中的参考 ROI 是绿色
 - 左边单击 suite2p ROI：只查看 trace
 - 左边双击 suite2p ROI：加入/移出最终人工 ROI set
-- 右边显示最终会保存的 ROI；可以在右边点选手画 ROI 或已选 suite2p ROI，右键直接删除/移除。右键会直接处理点到的 ROI，不需要先选中，也不需要先切回 `select ROI` 模式
+- 右边显示最终会保存的 ROI；已选 suite2p ROI 即使在左边关闭 `show suite2p refs` 后也会继续显示。可以在右边点选手画 ROI 或已选 suite2p ROI，右键直接删除/移除。右键会直接处理点到的 ROI，不需要先选中，也不需要先切回 `select ROI` 模式
 - 右边：切到 `draw freehand ROI` 后，可以按住鼠标或数位板笔直接圈画，松开后自动生成 ROI
 - 右边：切到 `draw ellipse ROI` 后，可以拖出一个椭圆 ROI
 - 下方 `Play/Pause`：播放或暂停 movie；旁边 `fps` 可以调播放速度
