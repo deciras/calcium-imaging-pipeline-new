@@ -471,6 +471,7 @@ class CurationWindow(QMainWindow):
         self.frame_slider = QSlider(Qt.Orientation.Horizontal)
         self.frame_slider.setMinimum(0)
         self.frame_slider.setMaximum(max(self.movie.shape[0] - 1, 0))
+        self.frame_slider.sliderPressed.connect(self.pause_for_manual_frame_scrub)
         self.frame_slider.valueChanged.connect(self.set_frame)
 
         self.frame_spin = QSpinBox()
@@ -836,6 +837,11 @@ class CurationWindow(QMainWindow):
         self.playing = False
         self.play_btn.setText("Play")
         self.play_timer.stop()
+
+    def pause_for_manual_frame_scrub(self) -> None:
+        if self.playing:
+            self.pause_playback()
+            self.status.showMessage("Paused for manual frame browsing")
 
     def advance_frame(self) -> None:
         n_frame = int(self.movie.shape[0])
