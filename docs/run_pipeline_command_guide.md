@@ -416,6 +416,7 @@ Linux 工作站也是同样格式，只需要把 `--data-root` 改成工作站�
 
 - `Movie source`：可以在 raw / motion corrected / spatial high-pass 之间切换
 - 切换 `Movie source` 只是换当前 trial 的显示底片，不会另存一套 ROI，也不会要求保存；手画 ROI 和已选 suite2p ROI 会继续保留
+- `Display` 里的 `black` / `white` 类似 Fiji 的 brightness/contrast：只改变画面显示，不改变原始 movie，也不改变 trace
 - `Files`：显示当前数据根目录里找到的 trial；可用 `Load selected` 或 `Next` 切换
 - 右侧控制区可以上下滚动，屏幕较小时按钮不会被挤出窗口
 - 左边：默认只显示视频，不显示 suite2p ROI
@@ -431,6 +432,12 @@ Linux 工作站也是同样格式，只需要把 `--data-root` 改成工作站�
 - `Delete selected`：从人工校对输出里删除当前 ROI
 - Trace 面板：显示当前 ROI 的 `F`、`Fneu`、`F - 0.7Fneu` 和 dF/F
 - `Save manual curation`：保存结果，但不会改写 suite2p 原始输出
+
+Trace 来源：
+
+- suite2p ROI 的 trace 直接来自 suite2p 输出的 `F.npy` 和 `Fneu.npy`
+- 手画 ROI 的 trace 固定从 suite2p 主线使用的底片计算：优先用 `04_spatial_highpass`，如果没有则回退到 `03_motion_correct`
+- 切换当前显示的 `Movie source` 或调 brightness/contrast，只影响看图，不会改变 trace
 
 快捷键：
 

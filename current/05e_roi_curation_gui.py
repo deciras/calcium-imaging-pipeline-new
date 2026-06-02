@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -457,6 +458,8 @@ class CurationWindow(QMainWindow):
         self.suite2p_loaded = False
         self.suite2p_ref_flags = np.zeros((0,), dtype=bool)
         self.movie = movie_as_tyx(paths.movie_path)
+        self.trace_movie_path = self.default_trace_movie_path(paths)
+        self.trace_movie = movie_as_tyx(self.trace_movie_path)
         self.frame_index = 0
         self.selected_roi: int | None = None
         self.selected_manual_roi: int | None = None
@@ -509,6 +512,25 @@ class CurationWindow(QMainWindow):
         self.fps_spin.setSuffix(" fps")
         self.fps_spin.valueChanged.connect(self.update_play_timer_interval)
         self.update_play_timer_interval()
+
+        self.black_spin = QDoubleSpinBox()
+        self.black_spin.setRange(0.0, 99.8)
+        self.black_spin.setDecimals(1)
+        self.black_spin.setSingleStep(0.5)
+        self.black_spin.setSuffix(" %")
+        self.black_spin.setValue(self.low_pct)
+        self.black_spin.valueChanged.connect(self.update_display_contrast)
+
+        self.white_spin = QDoubleSpinBox()
+        self.white_spin.setRange(0.2, 100.0)
+        self.white_spin.setDecimals(1)
+        self.white_spin.setSingleStep(0.5)
+        self.white_spin.setSuffix(" %")
+        self.white_spin.setValue(self.high_pct)
+        self.white_spin.valueChanged.connect(self.update_display_contrast)
+
+        reset_display_btn = QPushButton("Reset display")
+        reset_display_btn.clicked.connect(self.reset_display_contrast)
 
         self.roi_list = QListWidget()
         self.roi_list.currentRowChanged.connect(self.select_roi_from_list)
@@ -577,6 +599,15 @@ class CurationWindow(QMainWindow):
         controls.addWidget(self.trial_list)
         controls.addWidget(load_trial_btn)
         controls.addWidget(next_trial_btn)
+        controls.addSpacing(10)
+        controls.addWidget(QLabel("Display"))
+        display_row = QHBoxLayout()
+        display_row.addWidget(QLabel("black"))
+        display_row.addWidget(self.black_spin)
+        display_row.addWidget(QLabel("white"))
+        display_row.addWidget(self.white_spin)
+        controls.addLayout(display_row)
+        controls.addWidget(reset_display_btn)
         controls.addSpacing(10)
         controls.addWidget(QLabel("ROI list"))
         controls.addWidget(self.roi_list)
@@ -793,6 +824,18 @@ class CurationWindow(QMainWindow):
             refreshed.append(roi)
         self.added_rois = refreshed
 
+    def default_trace_movie_path(self, paths: TrialPaths) -> Path:
+        for kind in ("spatial-highpass", "corrected"):
+            try:
+                return find_movie_path(self.data_root, paths.trial_id, kind)
+            except Exception:
+                continue
+        return paths.movie_path
+
+    def load_trace_movie_for_trial(self, paths: TrialPaths) -> None:
+        self.trace_movie_path = self.default_trace_movie_path(paths)
+        self.trace_movie = movie_as_tyx(self.trace_movie_path)
+
     def load_suite2p_refs(self) -> None:
         if self.paths.stat_path is None or not self.paths.stat_path.exists():
             self.show_suite2p.blockSignals(True)
@@ -931,6 +974,7 @@ class CurationWindow(QMainWindow):
         self.suite2p_loaded = False
         self.suite2p_ref_flags = np.zeros((0,), dtype=bool)
         self.movie = movie_as_tyx(paths.movie_path)
+        self.load_trace_movie_for_trial(paths)
         self.frame_index = 0
         self.selected_roi = None
         self.selected_manual_roi = None
@@ -961,6 +1005,29 @@ class CurationWindow(QMainWindow):
     def update_play_timer_interval(self) -> None:
         fps = max(int(self.fps_spin.value()), 1)
         self.play_timer.setInterval(max(1, int(round(1000.0 / fps))))
+
+    def update_display_contrast(self) -> None:
+        low = float(self.black_spin.value())
+        high = float(self.white_spin.value())
+        if high <= low:
+            high = min(100.0, low + 0.2)
+            self.white_spin.blockSignals(True)
+            self.white_spin.setValue(high)
+            self.white_spin.blockSignals(False)
+        self.low_pct = low
+        self.high_pct = high
+        self.refresh()
+
+    def reset_display_contrast(self) -> None:
+        self.black_spin.blockSignals(True)
+        self.white_spin.blockSignals(True)
+        self.black_spin.setValue(1.0)
+        self.white_spin.setValue(99.0)
+        self.black_spin.blockSignals(False)
+        self.white_spin.blockSignals(False)
+        self.low_pct = 1.0
+        self.high_pct = 99.0
+        self.refresh()
 
     def toggle_playback(self) -> None:
         if self.playing:
@@ -1259,6 +1326,7 @@ class CurationWindow(QMainWindow):
             "neuropil_coeff": float(self.neuropil_coeff),
             "f0_percentile": float(self.f0_percentile),
             "f0": float(f0),
+            "trace_movie_path": str(self.trace_movie_path),
             "trace_summary": {
                 "mean_F": float(np.nanmean(f)),
                 "mean_Fneu": float(np.nanmean(fneu)),
@@ -1273,9 +1341,12 @@ class CurationWindow(QMainWindow):
         }
 
     def mean_trace(self, mask: np.ndarray) -> np.ndarray:
+        trace_movie = self.trace_movie
+        if trace_movie.shape[-2:] != mask.shape:
+            trace_movie = self.movie
         if not np.any(mask):
-            return np.full((self.movie.shape[0],), np.nan, dtype=np.float32)
-        pixels = self.movie[:, mask]
+            return np.full((trace_movie.shape[0],), np.nan, dtype=np.float32)
+        pixels = trace_movie[:, mask]
         return np.asarray(np.nanmean(pixels, axis=1), dtype=np.float32)
 
     def set_selected_state(self, state: int) -> None:
@@ -1763,7 +1834,8 @@ class CurationWindow(QMainWindow):
                     handle.write(",".join(str(value) for value in row) + "\n")
         summary = {
             "trial_id": self.paths.trial_id,
-            "movie_path": str(self.paths.movie_path),
+            "display_movie_path": str(self.paths.movie_path),
+            "manual_trace_movie_path": str(self.trace_movie_path),
             "source_iscell": str(self.paths.curated_iscell_path or self.paths.iscell_path),
             "manual_iscell_path": str(iscell_path),
             "selected_suite2p_indices_path": str(kept_path),
@@ -1787,7 +1859,8 @@ class CurationWindow(QMainWindow):
             "note": (
                 "The saved manual ROI set contains accepted manual ROIs plus selected "
                 "suite2p reference ROIs only. Suite2p source files are not edited in place. "
-                "Manual ROI neuropil is estimated from a local annulus in the selected movie."
+                "Manual ROI traces use the suite2p input movie when available, while "
+                "brightness/contrast controls affect display only."
             ),
         }
         with summary_path.open("w", encoding="utf-8") as handle:

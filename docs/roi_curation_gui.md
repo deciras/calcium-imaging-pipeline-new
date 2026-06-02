@@ -29,6 +29,7 @@ Linux 工作站上也用同一套命令。只需要把 `--data-root` 改成 Linu
   - `motion corrected (03)`：03 运动矫正后的 movie
   - `spatial high-pass (04)`：04 空间高通滤波后的 movie
 - 切换 `Movie source` 只是换当前 trial 的显示底片，不会另存一套 ROI，也不会要求保存。手画 ROI 和已选 suite2p ROI 会继续保留。
+- `Display` 里的 `black` / `white` 类似 Fiji 的 brightness/contrast：只改变画面显示，不改变原始 movie，也不改变 trace。
 - `Files`：显示当前数据根目录里找到的 trial。可以点 `Load selected` 打开选中的 trial，也可以点 `Next` 切到下一个。
 - 右侧控制区可以上下滚动，屏幕较小时按钮不会被挤出窗口。
 - 左边窗口：默认只显示视频，不显示 suite2p ROI。
@@ -39,6 +40,12 @@ Linux 工作站上也用同一套命令。只需要把 `--data-root` 改成 Linu
 - 下方滑条：拖动时间帧；`Play/Pause` 可以播放/暂停，旁边的 `fps` 可以调播放速度。
 - 右侧列表：已有 suite2p ROI 列表。
 - Trace 图：显示当前选中 ROI 的 `F`、`Fneu`、`F - 0.7Fneu` 和 dF/F。
+
+Trace 来源：
+
+- suite2p ROI 的 trace 直接来自 suite2p 输出的 `F.npy` 和 `Fneu.npy`。
+- 手画 ROI 的 trace 固定从 suite2p 主线使用的底片计算：优先用 `04_spatial_highpass`，如果没有则回退到 `03_motion_correct`。
+- 因此切换当前显示的 `Movie source` 或调 brightness/contrast，只影响你看图，不会改变 trace。
 
 ## 怎么从 suite2p 里捡 ROI
 
