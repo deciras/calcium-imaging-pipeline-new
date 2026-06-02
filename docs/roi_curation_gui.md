@@ -71,6 +71,8 @@ Linux 工作站上也用同一套命令。只需要把 `--data-root` 改成 Linu
 
 切换 trial 或退出窗口前，如果当前 ROI 修改还没有保存，会提示是否保存。
 
+如果这个 trial 之前已经保存过 05e 结果，再次打开时会自动读回上次保存的校对状态，包括已选的 suite2p ROI、手画 ROI 和已移除的参考 ROI。也就是说可以分多次慢慢校对，不需要一次做完。
+
 ## 怎么手动画新 ROI
 
 自由手绘：
@@ -110,6 +112,8 @@ DATA_ROOT/05e_roi_manual_curation/<trial>/
 - `suite2p_compatible/plane0/F.npy` / `Fneu.npy`：如果 trace 长度一致，会一起导出
 - `RoiSet.zip`：兼容 Fiji/ImageJ 的 ROI set
 - `<trial>_manual_curation_summary.json`：本次校对摘要
+
+重新打开同一个 trial 时，GUI 会优先读取这些已保存结果，方便继续调整。
 
 ## 当前限制
 

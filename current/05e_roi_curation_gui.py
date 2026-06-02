@@ -129,6 +129,22 @@ def find_movie_path(data_root: Path, trial_id: str, movie_kind: str) -> Path:
     raise FileNotFoundError(f"No movie found for {trial_id} using movie_kind={movie_kind}")
 
 
+def read_index_csv(path: Path) -> set[int]:
+    if not path.exists() or path.stat().st_size == 0:
+        return set()
+    values: set[int] = set()
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            text = line.strip()
+            if not text or text.startswith("suite2p_original_id"):
+                continue
+            try:
+                values.add(int(float(text.split(",")[0])))
+            except ValueError:
+                continue
+    return values
+
+
 def discover_trial_ids(data_root: Path, movie_kind: str) -> list[str]:
     roots: list[Path] = []
     if movie_kind == "raw":
@@ -612,6 +628,7 @@ class CurationWindow(QMainWindow):
         widget.setLayout(main_layout)
         self.setCentralWidget(widget)
 
+        self.load_saved_curation_if_present()
         self.populate_roi_list()
         self.refresh()
         self.update_trace_plot()
@@ -726,6 +743,60 @@ class CurationWindow(QMainWindow):
         self.status.showMessage(f"Loaded {len(self.stat)} suite2p reference ROIs")
         self.populate_roi_list()
 
+    def load_saved_curation_if_present(self) -> None:
+        out_dir = self.paths.output_dir
+        additions_path = out_dir / f"{self.paths.trial_id}_manual_added_rois.json"
+        selected_path = out_dir / f"{self.paths.trial_id}_selected_suite2p_indices.csv"
+        deleted_path = out_dir / f"{self.paths.trial_id}_deleted_suite2p_indices.csv"
+        loaded_parts: list[str] = []
+
+        selected_refs = read_index_csv(selected_path)
+        deleted_refs = read_index_csv(deleted_path)
+        if selected_refs or deleted_refs:
+            if not self.suite2p_loaded:
+                self.load_suite2p_refs()
+            valid_selected = {idx for idx in selected_refs if 0 <= idx < len(self.iscell)}
+            valid_deleted = {idx for idx in deleted_refs if idx >= 0}
+            self.selected_suite2p_refs = valid_selected
+            self.deleted_existing = valid_deleted
+            for idx in valid_selected:
+                self.iscell[idx, 0] = 1.0
+                self.iscell[idx, 1] = 1.0
+            if valid_selected:
+                self.show_suite2p_refs = True
+                self.show_suite2p.blockSignals(True)
+                self.show_suite2p.setChecked(True)
+                self.show_suite2p.blockSignals(False)
+            loaded_parts.append(f"{len(valid_selected)} suite2p pick(s)")
+
+        if additions_path.exists():
+            try:
+                with additions_path.open("r", encoding="utf-8") as handle:
+                    saved_rois = json.load(handle)
+            except Exception as exc:
+                QMessageBox.warning(self, "Load saved ROI", f"Could not load saved manual ROIs:\n{exc}")
+                saved_rois = []
+            self.added_rois = []
+            for saved in saved_rois:
+                points = [(float(x), float(y)) for x, y in saved.get("points", [])]
+                if len(points) < 3:
+                    continue
+                mask = polygon_mask(points, self.movie.shape[-2:])
+                if int(mask.sum()) < 3:
+                    continue
+                roi = self.build_manual_roi(mask)
+                roi.update(saved)
+                roi["points"] = points
+                self.added_rois.append(roi)
+            loaded_parts.append(f"{len(self.added_rois)} manual ROI(s)")
+
+        if loaded_parts:
+            self.dirty = False
+            self.undo_stack = []
+            self.selected_roi = None
+            self.selected_manual_roi = None
+            self.status.showMessage("Loaded saved curation: " + ", ".join(loaded_parts))
+
     def maybe_save_before_switch(self) -> bool:
         if not self.dirty:
             return True
@@ -811,6 +882,7 @@ class CurationWindow(QMainWindow):
         self.frame_slider.setValue(0)
         self.frame_spin.setMaximum(max(self.movie.shape[0] - 1, 0))
         self.frame_spin.setValue(0)
+        self.load_saved_curation_if_present()
         self.populate_roi_list()
         self.refresh()
         self.update_trace_plot()
