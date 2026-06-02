@@ -35,7 +35,7 @@ Linux 工作站上也用同一套命令。只需要把 `--data-root` 改成 Linu
 - 右边窗口：显示最终会保存的 ROI，也就是手画 ROI 和已经选中的 suite2p ROI。
 - 右边窗口：切到 `draw freehand ROI` 后，可以按住鼠标或数位板笔直接圈画 ROI。
 - 右边窗口：切到 `draw ellipse ROI` 后，可以拖出一个椭圆 ROI。
-- 下方滑条：拖动时间帧。
+- 下方滑条：拖动时间帧；`Play/Pause` 可以播放/暂停，旁边的 `fps` 可以调播放速度。
 - 右侧列表：已有 suite2p ROI 列表。
 - Trace 图：显示当前选中 ROI 的 `F`、`Fneu`、`F - 0.7Fneu` 和 dF/F。
 
@@ -60,11 +60,14 @@ Linux 工作站上也用同一套命令。只需要把 `--data-root` 改成 Linu
 - `Delete` 或 `Backspace`：删除当前 ROI
 - `X`：reject 当前 ROI
 - `K`：keep 当前 ROI
+- `Space`：播放/暂停
 - `Ctrl+Z` 或 `U`：撤销上一步 keep/reject/delete/add
 - `S`：显示/隐藏 suite2p 参考层
-- `方向键`：跳到上下左右方向最近的 ROI
+- `方向键`：有 ROI 被选中时，跳到上下左右方向最近的 ROI；没有选中 ROI 时，左右键逐帧前后移动
 - `Esc`：撤销当前手绘线最后一段
 - `Enter`：完成当前手绘/椭圆 ROI
+
+播放不会因为你正在画 ROI 或点选 ROI 就自动停下。只有点 `Pause` 或按空格才会暂停。播放时是一帧一帧前进并循环到开头；如果电脑一时忙不过来，它会变慢，而不是跳过中间帧。
 
 切换 trial 或退出窗口前，如果当前 ROI 修改还没有保存，会提示是否保存。
 

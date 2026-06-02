@@ -396,7 +396,7 @@ python3 current/run_pipeline.py \
 
 ## Step 05e：打开人工 ROI 校对 GUI
 
-05e 是一个交互式窗口，不是批量计算步骤。它用来在 suite2p 之后人工检查 ROI：左边看带 ROI 圈的电影，右边看原电影；可以把已有 ROI 标成 keep/reject，也可以在右边用多边形画新的 ROI。
+05e 是一个交互式窗口，不是批量计算步骤。它用来在 suite2p 之后人工检查 ROI：左边看电影和可选的 suite2p 参考 ROI，右边看最终会保存的人工 ROI set；可以把已有 ROI 标成 keep/reject，也可以在右边用 freehand 或椭圆画新的 ROI。
 
 打开一个 trial：
 
@@ -425,6 +425,7 @@ Linux 工作站也是同样格式，只需要把 `--data-root` 改成工作站�
 - 右边显示最终会保存的 ROI；可以在右边点选手画 ROI 或已选 suite2p ROI，右键直接删除/移除
 - 右边：切到 `draw freehand ROI` 后，可以按住鼠标或数位板笔直接圈画，松开后自动生成 ROI
 - 右边：切到 `draw ellipse ROI` 后，可以拖出一个椭圆 ROI
+- 下方 `Play/Pause`：播放或暂停 movie；旁边 `fps` 可以调播放速度
 - `Keep selected` / `Reject selected`：保留或标记不用当前 ROI
 - `Delete selected`：从人工校对输出里删除当前 ROI
 - Trace 面板：显示当前 ROI 的 `F`、`Fneu`、`F - 0.7Fneu` 和 dF/F
@@ -435,11 +436,14 @@ Linux 工作站也是同样格式，只需要把 `--data-root` 改成工作站�
 - `Delete` 或 `Backspace`：删除当前 ROI
 - `X`：reject 当前 ROI
 - `K`：keep 当前 ROI
+- `Space`：播放/暂停
 - `Ctrl+Z` 或 `U`：撤销上一步 keep/reject/delete/add
 - `S`：显示/隐藏 suite2p 参考层
-- `方向键`：跳到上下左右方向最近的 ROI
+- `方向键`：有 ROI 被选中时跳到最近 ROI；没有选中 ROI 时，左右键逐帧前后移动
 - `Esc`：撤销当前手绘线最后一段
 - `Enter`：完成当前手绘/椭圆 ROI；freehand 模式通常松开鼠标/笔就会自动完成
+
+播放状态下可以继续点选、删除、reject 或手画 ROI。GUI 会按帧前进并循环播放；如果电脑处理不过来，会播放得慢一点，但不会主动跳过中间帧。
 
 05e 输出到：
 
@@ -472,6 +476,7 @@ DATA_ROOT/05e_roi_manual_curation/<trial>/
 - 切换 trial 或退出前，如果有未保存修改，会提示是否保存
 - `reject` 表示保留记录但后续不用；`delete` 表示从人工 ROI set 中移除
 - 手画 ROI 的 neuropil 是用 ROI 周围一圈像素近似估计的，适合人工判断 trace 是否像细胞
+- 播放控制已经接入 GUI，可以边播放 movie 边校对 ROI
 - 这一版 05e 先负责“校对和保存”，还没有自动接入 06；后续可以让 06 优先读取 05e 的人工校对结果
 - 05e 可以逐步发展成主力手动 ROI 标注工具；suite2p 可以只作为可选预标注
 

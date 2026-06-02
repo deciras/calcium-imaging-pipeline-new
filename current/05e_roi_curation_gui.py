@@ -25,7 +25,7 @@ import tifffile as tf
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from matplotlib.path import Path as MplPath
-from PySide6.QtCore import QPoint, QPointF, QRect, Qt, Signal
+from PySide6.QtCore import QPoint, QPointF, QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -456,6 +456,7 @@ class CurationWindow(QMainWindow):
         self.dirty = False
         self.low_pct = 1.0
         self.high_pct = 99.0
+        self.playing = False
 
         self.setWindowTitle(f"ROI curation - {paths.trial_id}")
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -476,6 +477,21 @@ class CurationWindow(QMainWindow):
         self.frame_spin.setMinimum(0)
         self.frame_spin.setMaximum(max(self.movie.shape[0] - 1, 0))
         self.frame_spin.valueChanged.connect(self.set_frame)
+
+        self.play_timer = QTimer(self)
+        self.play_timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self.play_timer.timeout.connect(self.advance_frame)
+
+        self.play_btn = QPushButton("Play")
+        self.play_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.play_btn.clicked.connect(self.toggle_playback)
+
+        self.fps_spin = QSpinBox()
+        self.fps_spin.setRange(1, 120)
+        self.fps_spin.setValue(10)
+        self.fps_spin.setSuffix(" fps")
+        self.fps_spin.valueChanged.connect(self.update_play_timer_interval)
+        self.update_play_timer_interval()
 
         self.roi_list = QListWidget()
         self.roi_list.currentRowChanged.connect(self.select_roi_from_list)
@@ -579,6 +595,8 @@ class CurationWindow(QMainWindow):
 
         slider_layout = QHBoxLayout()
         slider_layout.addWidget(QLabel("frame"))
+        slider_layout.addWidget(self.play_btn)
+        slider_layout.addWidget(self.fps_spin)
         slider_layout.addWidget(self.frame_slider)
         slider_layout.addWidget(self.frame_spin)
 
@@ -752,10 +770,15 @@ class CurationWindow(QMainWindow):
                 return
         if not already_checked and not self.maybe_save_before_switch():
             return
+        was_playing = self.playing
+        if was_playing:
+            self.pause_playback()
         try:
             paths = find_trial_paths(self.data_root, trial_id, self.movie_kind)
         except Exception as exc:
             QMessageBox.warning(self, "Load trial", str(exc))
+            if was_playing:
+                self.start_playback()
             return
         self.paths = paths
         self.setWindowTitle(f"ROI curation - {paths.trial_id}")
@@ -790,9 +813,39 @@ class CurationWindow(QMainWindow):
         self.populate_roi_list()
         self.refresh()
         self.update_trace_plot()
+        if was_playing:
+            self.start_playback()
+
+    def update_play_timer_interval(self) -> None:
+        fps = max(int(self.fps_spin.value()), 1)
+        self.play_timer.setInterval(max(1, int(round(1000.0 / fps))))
+
+    def toggle_playback(self) -> None:
+        if self.playing:
+            self.pause_playback()
+        else:
+            self.start_playback()
+
+    def start_playback(self) -> None:
+        self.playing = True
+        self.play_btn.setText("Pause")
+        self.update_play_timer_interval()
+        self.play_timer.start()
+
+    def pause_playback(self) -> None:
+        self.playing = False
+        self.play_btn.setText("Play")
+        self.play_timer.stop()
+
+    def advance_frame(self) -> None:
+        n_frame = int(self.movie.shape[0])
+        if n_frame <= 1:
+            return
+        self.set_frame((self.frame_index + 1) % n_frame)
 
     def set_frame(self, value: int) -> None:
-        value = int(value)
+        max_frame = max(int(self.movie.shape[0]) - 1, 0)
+        value = max(0, min(int(value), max_frame))
         if value == self.frame_index:
             return
         self.frame_index = value
@@ -1358,11 +1411,20 @@ class CurationWindow(QMainWindow):
     def keyPressEvent(self, event) -> None:  # type: ignore[override]
         key = event.key()
         modifiers = event.modifiers()
+        if key == Qt.Key.Key_Space:
+            self.toggle_playback()
+            return
         if key == Qt.Key.Key_Left:
-            self.move_selection(-1, 0)
+            if self.selected_roi is None and self.selected_manual_roi is None:
+                self.set_frame(self.frame_index - 1)
+            else:
+                self.move_selection(-1, 0)
             return
         if key == Qt.Key.Key_Right:
-            self.move_selection(1, 0)
+            if self.selected_roi is None and self.selected_manual_roi is None:
+                self.set_frame(self.frame_index + 1)
+            else:
+                self.move_selection(1, 0)
             return
         if key == Qt.Key.Key_Up:
             self.move_selection(0, -1)
