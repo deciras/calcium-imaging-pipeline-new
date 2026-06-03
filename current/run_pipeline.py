@@ -1040,9 +1040,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--roi-source",
-        choices=("auto", "suite2p", "all"),
+        choices=("auto", "manual", "suite2p", "all"),
         default=None,
-        help="Step 06: ROI source. auto uses suite2p iscell.",
+        help="Step 06: ROI source. auto uses manual curation when present, otherwise suite2p iscell.",
     )
     parser.add_argument(
         "--f0-mode",

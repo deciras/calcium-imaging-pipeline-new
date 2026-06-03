@@ -131,5 +131,5 @@ DATA_ROOT/05e_roi_manual_curation/<trial>/
 ## 当前限制
 
 - 这一版 manual GUI 先负责人工校对和保存结果。
-- 06 当前仍默认读取 05 suite2p 输出。下一步可以让 06 优先读取 manual GUI 保存的 `suite2p_compatible/plane0/`，这样手画 ROI 会正式进入后续分析。
+- 06 默认会优先读取 manual GUI 保存的 `suite2p_compatible/plane0/`；没有 manual 结果的 trial 才回退到 05 suite2p。
 - 手画 ROI 的 neuropil 是近似值，用来辅助判断 trace，不等同于 suite2p 的完整 neuropil mask；旧校对结果重新加载时只保留 ROI 形状和位置，trace / Fneu / dF/F 会重新计算。

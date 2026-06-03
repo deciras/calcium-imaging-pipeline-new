@@ -144,7 +144,7 @@ python3 current/run_pipeline.py \
   --action skip
 ```
 
-05 默认用 `04_spatial_highpass` 跑 suite2p，因为 high-pass 图更适合找 ROI 边界。06 默认只使用 suite2p 的 ROI 位置和形状，然后从 `03_motion_correct` 重新抽 F、Fneu 和 dF/F。
+05 默认用 `04_spatial_highpass` 跑 suite2p，因为 high-pass 图更适合找 ROI 边界。manual GUI 保存人工校对结果后，06 会优先读取 manual 的最终 ROI set；没有 manual 结果的 trial 才回退到 suite2p `iscell.npy`。无论 ROI 来源是哪一个，06 都默认从 `03_motion_correct` 重新抽 F、Fneu 和 dF/F。
 
 ## 一口气跑后半段
 
@@ -240,11 +240,12 @@ python3 current/run_pipeline.py \
 
 ### 06 提取 dF/F
 
-读取 suite2p 的 ROI 形状和 `iscell.npy`，但默认不直接使用 suite2p 在 high-pass movie 上算出的 F/Fneu。
+读取 ROI 形状并计算 dF/F。
 
 默认做法是：
 
-- ROI 位置和形状来自 05 suite2p
+- 有 manual GUI 保存结果时，ROI 位置和形状来自人工校对结果
+- 没有 manual 结果时，ROI 位置和形状来自 05 suite2p
 - F、Fneu、dF/F 从 `03_motion_correct` 的 movie 重新计算
 
 默认：
@@ -253,7 +254,7 @@ python3 current/run_pipeline.py \
 F_corrected = F - 0.7 * Fneu
 ```
 
-如果某次临时想回退到 suite2p 自己的 `F.npy/Fneu.npy`，可以给单步脚本传 `--trace-source suite2p`。
+如果某次临时想强制只用 suite2p ROI，可以用 `--roi-source suite2p`。如果想回退到 suite2p 自己的 `F.npy/Fneu.npy`，可以给单步脚本传 `--trace-source suite2p`。
 
 ### 07 检测 calcium events
 

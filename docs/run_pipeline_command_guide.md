@@ -37,6 +37,7 @@ python3 current/run_pipeline.py \
 
 - 05 仍然默认用 `04_spatial_highpass` 跑 suite2p，因为 high-pass 图更适合找 ROI 边界。
 - 05 产生的 suite2p 结果只当作 ROI 位置和形状候选。
+- 06 默认优先读取 manual GUI 保存的最终 ROI set；没有 manual 结果的 trial 才回退到 suite2p `iscell.npy`。
 - 06 默认从 `03_motion_correct` 重新抽 F、Fneu 和 dF/F，不直接相信 high-pass 图上的 suite2p trace。
 
 ## 一次跑自动前半段
@@ -149,7 +150,13 @@ python3 current/run_pipeline.py \
   --action overwrite
 ```
 
-06 默认会从 `03_motion_correct` 重新抽 trace。如果临时想用 suite2p 自己的 `F.npy/Fneu.npy`，可以加：
+06 默认会优先使用 manual GUI 的最终 ROI set，并从 `03_motion_correct` 重新抽 trace。如果临时想强制只用 suite2p ROI，可以加：
+
+```bash
+--roi-source suite2p
+```
+
+如果临时想用 suite2p 自己的 `F.npy/Fneu.npy`，可以加：
 
 ```bash
 --step-args "--trace-source suite2p"
