@@ -61,7 +61,6 @@ class TrialPaths:
     iscell_path: Path | None
     f_path: Path | None
     fneu_path: Path | None
-    curated_iscell_path: Path | None
     movie_path: Path
     output_dir: Path
 
@@ -95,7 +94,6 @@ def find_trial_paths(data_root: Path, trial_id: str | None, movie_kind: str) -> 
         f_path = None
         fneu_path = None
 
-    curated = data_root / "05c_roi_quality_filter" / trial_id / f"{trial_id}_iscell_curated.npy"
     movie_path = find_movie_path(data_root, trial_id, movie_kind)
     return TrialPaths(
         trial_id=trial_id,
@@ -105,7 +103,6 @@ def find_trial_paths(data_root: Path, trial_id: str | None, movie_kind: str) -> 
         iscell_path=iscell_path,
         f_path=f_path,
         fneu_path=fneu_path,
-        curated_iscell_path=curated if curated.exists() else None,
         movie_path=movie_path,
         output_dir=data_root / STEP_NAME / trial_id,
     )
@@ -178,10 +175,7 @@ def load_iscell(paths: TrialPaths, n_roi: int) -> np.ndarray:
         out = np.zeros((n_roi, 2), dtype=np.float32)
         out[:, 1] = np.nan
         return out
-    if paths.curated_iscell_path is not None:
-        arr = np.load(paths.curated_iscell_path, allow_pickle=True)
-    else:
-        arr = np.load(paths.iscell_path, allow_pickle=True)
+    arr = np.load(paths.iscell_path, allow_pickle=True)
     if arr.ndim != 2 or arr.shape[0] != n_roi:
         out = np.zeros((n_roi, 2), dtype=np.float32)
         out[:, 1] = np.nan
@@ -1419,14 +1413,7 @@ class CurationWindow(QMainWindow):
 
     def build_manual_roi(self, mask: np.ndarray) -> dict:
         ypix, xpix = np.nonzero(mask)
-        annulus = annulus_mask(mask)
-        f = self.mean_trace(mask)
-        fneu = self.mean_trace(annulus) if np.any(annulus) else np.full_like(f, np.nan)
-        if np.all(~np.isfinite(fneu)):
-            fcorr = f.copy()
-        else:
-            fcorr = f - self.neuropil_coeff * np.nan_to_num(fneu, nan=0.0)
-        dff, f0 = robust_dff(fcorr, self.f0_percentile, self.f0_eps)
+        f, fneu, fcorr, dff, f0 = self.traces_for_mask(mask)
         return {
             "manual_roi_id": len(self.added_rois) + 1,
             "roi_type": "ellipse" if self.mode_combo.currentText() == "draw ellipse ROI" else "freehand",
@@ -1452,6 +1439,33 @@ class CurationWindow(QMainWindow):
             "_trace_F_corrected": fcorr.astype(float).tolist(),
             "_trace_dff": dff.astype(float).tolist(),
         }
+
+    def traces_for_mask(self, mask: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, float]:
+        annulus = annulus_mask(mask)
+        f = self.mean_trace(mask)
+        fneu = self.mean_trace(annulus) if np.any(annulus) else np.full_like(f, np.nan)
+        if np.all(~np.isfinite(fneu)):
+            fcorr = f.copy()
+        else:
+            fcorr = f - self.neuropil_coeff * np.nan_to_num(fneu, nan=0.0)
+        dff, f0 = robust_dff(fcorr, self.f0_percentile, self.f0_eps)
+        return f, fneu, fcorr, dff, f0
+
+    def suite2p_mask(self, roi_idx: int) -> np.ndarray:
+        mask = np.zeros(self.trace_movie.shape[-2:], dtype=bool)
+        if roi_idx < 0 or roi_idx >= len(self.roi_cache):
+            return mask
+        roi = self.roi_cache[roi_idx]
+        ypix = np.asarray(roi.get("ypix", []), dtype=int)
+        xpix = np.asarray(roi.get("xpix", []), dtype=int)
+        valid = (
+            (ypix >= 0)
+            & (ypix < mask.shape[0])
+            & (xpix >= 0)
+            & (xpix < mask.shape[1])
+        )
+        mask[ypix[valid], xpix[valid]] = True
+        return mask
 
     def mean_trace(self, mask: np.ndarray) -> np.ndarray:
         trace_movie = self.trace_movie
@@ -1605,13 +1619,11 @@ class CurationWindow(QMainWindow):
         if self.selected_roi is None:
             self.trace_canvas.plot_empty("Select a ROI or draw a freehand/ellipse ROI")
             return
-        if self.F is None:
-            self.trace_canvas.plot_empty("F.npy is missing, so suite2p traces cannot be shown")
+        mask = self.suite2p_mask(self.selected_roi)
+        if not np.any(mask):
+            self.trace_canvas.plot_empty("Selected suite2p ROI has no pixels")
             return
-        f = np.asarray(self.F[self.selected_roi], dtype=float)
-        fneu = None if self.Fneu is None else np.asarray(self.Fneu[self.selected_roi], dtype=float)
-        fcorr = f.copy() if fneu is None else f - self.neuropil_coeff * fneu
-        dff, _ = robust_dff(fcorr, self.f0_percentile, self.f0_eps)
+        f, fneu, fcorr, dff, _ = self.traces_for_mask(mask)
         self.trace_canvas.plot_traces(f"suite2p ROI {self.selected_roi}", f, fneu, fcorr, dff)
 
     def frame_pixmap(self, view: str) -> QPixmap:
@@ -1878,10 +1890,11 @@ class CurationWindow(QMainWindow):
                     "suite2p_original_id": int(idx),
                 }
             )
-            if self.F is not None and idx < self.F.shape[0]:
-                suite2p_f_rows.append(np.asarray(self.F[idx], dtype=np.float32))
-            if self.Fneu is not None and idx < self.Fneu.shape[0]:
-                suite2p_fneu_rows.append(np.asarray(self.Fneu[idx], dtype=np.float32))
+            mask = self.suite2p_mask(int(idx))
+            if np.any(mask):
+                f, fneu, _, _, _ = self.traces_for_mask(mask)
+                suite2p_f_rows.append(np.asarray(f, dtype=np.float32))
+                suite2p_fneu_rows.append(np.asarray(fneu, dtype=np.float32))
             points = ordered_boundary_points(ypix, xpix)
             if len(points) >= 3:
                 fiji_rois.append((safe_roi_name("suite2p", int(idx)), points))
@@ -1954,7 +1967,7 @@ class CurationWindow(QMainWindow):
             "trial_id": self.paths.trial_id,
             "display_movie_path": str(self.paths.movie_path),
             "manual_trace_movie_path": str(self.trace_movie_path),
-            "source_iscell": str(self.paths.curated_iscell_path or self.paths.iscell_path),
+            "source_iscell": str(self.paths.iscell_path),
             "manual_iscell_path": str(iscell_path),
             "selected_suite2p_indices_path": str(kept_path),
             "deleted_suite2p_indices_path": str(deleted_path),
@@ -1977,7 +1990,7 @@ class CurationWindow(QMainWindow):
             "note": (
                 "The saved manual ROI set contains accepted manual ROIs plus selected "
                 "suite2p reference ROIs only. Suite2p source files are not edited in place. "
-                "Manual ROI traces use the motion-corrected movie when available, while "
+                "Displayed and exported ROI traces use the motion-corrected movie when available, while "
                 "brightness/contrast controls affect display only."
             ),
         }

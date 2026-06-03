@@ -8,9 +8,9 @@
 2. 用 Fiji / Bio-Formats 把 `.oir` 转成 TIFF
 3. 从刺激通道和刺激记录里整理刺激时间
 4. 做运动校正
-5. 用 suite2p 找 ROI
-6. 用手画 ROI 的经验筛一遍自动 ROI
-7. 提取 dF/F
+5. 用 suite2p 生成 ROI 候选
+6. 用人工 GUI 校对 ROI，也可以手画补 ROI
+7. 从 motion-corrected movie 重新提取 dF/F
 8. 检测 calcium events
 9. 分析刺激响应、角度调谐、群体特征、聚类和降维
 10. 最后生成跨 trial 汇总和 HTML 报告
@@ -86,8 +86,7 @@ test_dataset/
   03_motion_correct/
   04_spatial_highpass/
   05_suite2p_roi_detection/
-  05b_manual_roi_prior/
-  05c_roi_quality_filter/
+  05e_roi_manual_curation/
   06_dff/
   07_events/
   08_stim_response/
@@ -102,6 +101,50 @@ test_dataset/
 ```
 
 每一步的结果都放在自己的文件夹里。这样比较容易检查，也不容易把原始数据和中间结果混在一起。
+
+## 推荐主线
+
+现在流程分三段：
+
+```text
+premanual：00 -> 01 -> 02 -> 03 -> 04 -> 05
+manual：人工 ROI 校对
+postmanual：06 -> 07 -> 08 -> 09 -> 10 -> 11 -> 12 -> 13 -> 14 -> 15 -> 16
+```
+
+一口气跑自动前半段：
+
+```bash
+cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipeline-new
+
+python3 current/run_pipeline.py \
+  --steps premanual \
+  --data-root /Users/dingyifei/Documents/calcium-imaging-pipeline-new/test_dataset \
+  --action skip
+```
+
+打开人工 ROI 校对 GUI：
+
+```bash
+cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipeline-new
+
+python3 current/run_pipeline.py \
+  --steps manual \
+  --data-root /Users/dingyifei/Documents/calcium-imaging-pipeline-new/test_dataset
+```
+
+一口气跑自动后半段：
+
+```bash
+cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipeline-new
+
+python3 current/run_pipeline.py \
+  --steps postmanual \
+  --data-root /Users/dingyifei/Documents/calcium-imaging-pipeline-new/test_dataset \
+  --action skip
+```
+
+05 默认用 `04_spatial_highpass` 跑 suite2p，因为 high-pass 图更适合找 ROI 边界。06 默认只使用 suite2p 的 ROI 位置和形状，然后从 `03_motion_correct` 重新抽 F、Fneu 和 dF/F。
 
 ## 一口气跑后半段
 
@@ -183,36 +226,26 @@ python3 current/run_pipeline.py \
 
 ### 05 suite2p 自动找 ROI
 
-用 suite2p 做 ROI detection。
+用 suite2p 做 ROI detection。现在它主要负责生成 ROI 候选库，不再负责最终可信分类。
 
-现在偏向保守参数，因为这个数据里 ROI 过度检测是一个重要问题。
+默认输入是 `04_spatial_highpass`，因为 high-pass 底片更容易让 suite2p 找到局部边界。
 
 注意：目前更推荐 suite2p `0.14.4`。之前 `0.14.5` 在这批数据上出现过异常 ROI 行为。
 
-### 05b 从历史手画 ROI 建立参考
+### manual 人工校对 ROI
 
-读取以前手画过的 ImageJ ROI，统计它们的大小、形状、圆度等。
+这是唯一需要手动操作的步骤。它会打开 GUI，让你从 suite2p 候选 ROI 里挑选可信 ROI，也可以手画 freehand 或椭圆 ROI。
 
-这一步不是训练大模型，只是先建立一个“手画 ROI 大概长什么样”的参考。
-
-### 05c 筛选 suite2p ROI
-
-用 05b 得到的手画 ROI 形状经验，筛一遍 suite2p 的 ROI。
-
-这一步不会改 suite2p 原始结果，只会生成 curated ROI。
-
-后面的 06 默认会优先使用 05c 的 curated ROI。
+输出文件夹仍叫 `05e_roi_manual_curation/`，这是为了兼容以前已经保存过的人工校对结果。
 
 ### 06 提取 dF/F
 
-读取 suite2p 的：
+读取 suite2p 的 ROI 形状和 `iscell.npy`，但默认不直接使用 suite2p 在 high-pass movie 上算出的 F/Fneu。
 
-- `F.npy`
-- `Fneu.npy`
-- `iscell.npy`
-- `stat.npy`
+默认做法是：
 
-然后做 neuropil correction 和 dF/F。
+- ROI 位置和形状来自 05 suite2p
+- F、Fneu、dF/F 从 `03_motion_correct` 的 movie 重新计算
 
 默认：
 
@@ -220,13 +253,7 @@ python3 current/run_pipeline.py \
 F_corrected = F - 0.7 * Fneu
 ```
 
-默认 ROI 来源：
-
-```text
---roi-source auto
-```
-
-意思是：如果有 05c curated ROI，就用 05c；如果没有，就回退到 suite2p 的 `iscell.npy`。
+如果某次临时想回退到 suite2p 自己的 `F.npy/Fneu.npy`，可以给单步脚本传 `--trace-source suite2p`。
 
 ### 07 检测 calcium events
 
@@ -377,13 +404,13 @@ python3 current/run_pipeline.py \
   --action overwrite
 ```
 
-### 从 01 到 16 尽量安全地跑
+### 按当前主线尽量安全地跑
 
 ```bash
 cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipeline-new
 
 python3 current/run_pipeline.py \
-  --steps 01,02,03,04,05,05c,06,07,08,09,10,11,12,13,14,15,16 \
+  --steps premanual \
   --data-root /Users/dingyifei/Documents/calcium-imaging-pipeline-new/test_dataset \
   --action skip \
   --stim-export-mode both \
@@ -396,7 +423,28 @@ python3 current/run_pipeline.py \
   --diameter-scale 1.2 \
   --threshold-scaling 1.4 \
   --suite2p-threads 4 \
-  --n-workers 1 \
+  --n-workers 1
+```
+
+然后打开人工 ROI 校对：
+
+```bash
+cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipeline-new
+
+python3 current/run_pipeline.py \
+  --steps manual \
+  --data-root /Users/dingyifei/Documents/calcium-imaging-pipeline-new/test_dataset
+```
+
+人工校对完成后，再跑后半段：
+
+```bash
+cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipeline-new
+
+python3 current/run_pipeline.py \
+  --steps postmanual \
+  --data-root /Users/dingyifei/Documents/calcium-imaging-pipeline-new/test_dataset \
+  --action skip \
   --roi-source auto \
   --neuropil-coeff 0.7 \
   --f0-mode percentile \
@@ -465,7 +513,7 @@ docs/run_logs/
 当前主线已经接到：
 
 ```text
-00 -> 01 -> 02 -> 03 -> 04 -> 05 -> 05c -> 06 -> 07 -> 08 -> 09 -> 10 -> 11 -> 12 -> 13 -> 14 -> 15 -> 16
+00 -> 01 -> 02 -> 03 -> 04 -> 05 -> manual -> 06 -> 07 -> 08 -> 09 -> 10 -> 11 -> 12 -> 13 -> 14 -> 15 -> 16
 ```
 
 其中 13 Leiden 在没有 `igraph/leidenalg` 时会自动 soft-skip。
@@ -490,4 +538,3 @@ docs/run_logs/
 - 不确定时先用 `--step-dry-run`
 - 只有明确要重做某一步时才用 `--action overwrite`
 - 真实数据跑完后，先看每一步 summary，再相信后面的分析
-

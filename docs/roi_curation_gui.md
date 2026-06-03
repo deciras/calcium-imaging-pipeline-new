@@ -2,9 +2,9 @@
 
 这个工具用于人工标注/校对 ROI。目标是少一点折磨，多一点可控：能看视频、能看 ROI、能手动剔除错的 ROI，也能用 freehand 或椭圆补画 suite2p 漏掉的细胞。
 
-当前推荐主线是：05e 人工标注/校对，之后 06 读取人工结果。suite2p 可以只作为可选参考层，用来“捡”少数可用 ROI；05b/05c 那套“学习历史手画 ROI 再自动筛选”的路线保留为可选实验功能，不再作为主线。
+当前推荐主线是：05 跑 suite2p 候选 ROI，`manual` 人工标注/校对，之后 06 和后续分析继续处理。suite2p 可以只作为参考层，用来“捡”少数可用 ROI；05b/05c/05d 那套“自动学习历史手画 ROI 再筛选”的路线已经归档，不再作为主线。
 
-如果 suite2p 的 ROI 质量长期不稳定，05e 可以直接作为主力手动标注工具。suite2p 只负责可选预标注，甚至可以完全跳过。
+如果 suite2p 的 ROI 质量长期不稳定，manual GUI 可以直接作为主力手动标注工具。suite2p 只负责可选预标注。
 
 ## 打开方式
 
@@ -12,7 +12,7 @@
 cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipeline-new
 
 python3 current/run_pipeline.py \
-  --steps 05e \
+  --steps manual \
   --data-root /Users/dingyifei/Documents/calcium-imaging-pipeline-new/test_dataset \
   --trial-id 20260428_Euprymna_retina2_25x \
   --movie-kind corrected
@@ -44,8 +44,8 @@ Linux 工作站上也用同一套命令。只需要把 `--data-root` 改成 Linu
 
 Trace 来源：
 
-- suite2p ROI 的 trace 直接来自 suite2p 输出的 `F.npy` 和 `Fneu.npy`。
-- 手画 ROI 的 trace 固定从 motion-corrected 底片计算；如果没有 `03_motion_correct`，才回退到当前显示底片。
+- suite2p 候选 ROI 和手画 ROI 的 trace 都按 ROI 形状从 motion-corrected movie 重新计算；如果没有 `03_motion_correct`，才回退到当前显示底片。
+- 因此 05 可以用 spatial high-pass 图帮助 suite2p 找 ROI 边界，但 GUI 里看的 F、Fneu、`F - 0.7Fneu` 和 dF/F 仍然来自 motion-corrected movie。
 - 因此切换当前显示的 `Movie source` 或调 brightness/contrast，只影响你看图，不会改变 trace。
 
 ## 怎么从 suite2p 里捡 ROI
@@ -82,9 +82,9 @@ Trace 来源：
 
 切换 trial 或退出窗口前，如果当前 ROI 修改还没有保存，会提示是否保存。
 
-如果这个 trial 之前已经保存过 05e 结果，再次打开时会自动读回上次保存的校对状态，包括已选的 suite2p ROI、手画 ROI 和已移除的参考 ROI。也就是说可以分多次慢慢校对，不需要一次做完。
+如果这个 trial 之前已经保存过人工校对结果，再次打开时会自动读回上次保存的校对状态，包括已选的 suite2p ROI、手画 ROI 和已移除的参考 ROI。也就是说可以分多次慢慢校对，不需要一次做完。
 
-05e 的保存结果按 trial 保存，不按 `Movie source` 分开保存。`raw`、`motion corrected` 和 `spatial high-pass` 只是不同查看方式，最终指向同一套人工 ROI 校对结果。
+人工校对结果按 trial 保存，不按 `Movie source` 分开保存。`raw`、`motion corrected` 和 `spatial high-pass` 只是不同查看方式，最终指向同一套人工 ROI 校对结果。
 
 ## 怎么手动画新 ROI
 
@@ -106,7 +106,7 @@ Trace 来源：
 
 ## 保存了什么
 
-输出位置：
+输出位置仍然沿用旧文件夹名，避免破坏之前保存过的人工校对结果：
 
 ```text
 DATA_ROOT/05e_roi_manual_curation/<trial>/
@@ -122,7 +122,7 @@ DATA_ROOT/05e_roi_manual_curation/<trial>/
 - `<trial>_manual_added_roi_traces.csv`：手画 ROI 的 trace
 - `suite2p_compatible/plane0/stat.npy`：兼容 suite2p 风格的 ROI 文件
 - `suite2p_compatible/plane0/iscell.npy`：兼容 suite2p 风格的 ROI 标记
-- `suite2p_compatible/plane0/F.npy` / `Fneu.npy`：如果 trace 长度一致，会一起导出
+- `suite2p_compatible/plane0/F.npy` / `Fneu.npy`：如果 trace 长度一致，会一起导出；这些 trace 按 ROI 形状从 motion-corrected movie 重新计算
 - `RoiSet.zip`：兼容 Fiji/ImageJ 的 ROI set
 - `<trial>_manual_curation_summary.json`：本次校对摘要
 
@@ -130,6 +130,6 @@ DATA_ROOT/05e_roi_manual_curation/<trial>/
 
 ## 当前限制
 
-- 这一版 05e 先负责人工校对和保存结果。
-- 06 还没有默认读取 05e 的手画新 ROI；下一步可以把 05e 输出接进 06。
+- 这一版 manual GUI 先负责人工校对和保存结果。
+- 06 当前仍默认读取 05 suite2p 输出。下一步可以让 06 优先读取 manual GUI 保存的 `suite2p_compatible/plane0/`，这样手画 ROI 会正式进入后续分析。
 - 手画 ROI 的 neuropil 是近似值，用来辅助判断 trace，不等同于 suite2p 的完整 neuropil mask；旧校对结果重新加载时只保留 ROI 形状和位置，trace / Fneu / dF/F 会重新计算。
