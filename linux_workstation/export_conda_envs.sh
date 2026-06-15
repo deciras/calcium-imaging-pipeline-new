@@ -2,7 +2,7 @@
 set -euo pipefail
 
 CONDA_BIN="${CONDA_BIN:-conda}"
-OUT_DIR="${1:-conda_env_exports_$(date +%Y%m%d_%H%M%S)}"
+OUT_DIR="${1:-${HOME}/conda_env_exports_$(date +%Y%m%d_%H%M%S)}"
 
 if ! command -v "${CONDA_BIN}" >/dev/null 2>&1; then
   echo "Cannot find conda command: ${CONDA_BIN}" >&2
