@@ -71,16 +71,16 @@ bash linux_workstation/check_linux_setup.sh
 bash linux_workstation/export_conda_envs.sh
 ```
 
-默认会写到工作站自己的 home 目录，例如：
+默认会写到代码库上一级的 `calcium_imaging/` 目录，例如：
 
 ```text
-/home/yifei/conda_env_exports_20260616_003000/
+/mnt/50d357b2-473b-4533-8c74-1db99704876a/yifeiding/calcium_imaging/conda_env_exports_20260616_003000/
 ```
 
 也可以指定导出目录：
 
 ```bash
-bash linux_workstation/export_conda_envs.sh /home/yifei/conda_env_exports_workstation
+bash linux_workstation/export_conda_envs.sh /mnt/50d357b2-473b-4533-8c74-1db99704876a/yifeiding/calcium_imaging/conda_env_exports_workstation
 ```
 
 导出的内容包括 `conda_env_list.txt`、每个环境的 `.yml` 和包列表 `.txt`。

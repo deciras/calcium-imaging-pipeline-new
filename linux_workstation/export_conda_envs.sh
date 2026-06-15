@@ -2,7 +2,10 @@
 set -euo pipefail
 
 CONDA_BIN="${CONDA_BIN:-conda}"
-OUT_DIR="${1:-${HOME}/conda_env_exports_$(date +%Y%m%d_%H%M%S)}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+DEFAULT_EXPORT_ROOT="$(cd "${REPO_ROOT}/.." && pwd)"
+OUT_DIR="${1:-${CALCIUM_EXPORT_ROOT:-${DEFAULT_EXPORT_ROOT}}/conda_env_exports_$(date +%Y%m%d_%H%M%S)}"
 
 if ! command -v "${CONDA_BIN}" >/dev/null 2>&1; then
   echo "Cannot find conda command: ${CONDA_BIN}" >&2
