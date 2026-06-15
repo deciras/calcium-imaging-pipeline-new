@@ -25,6 +25,15 @@ import pandas as pd
 LOGGER = logging.getLogger("stim_response")
 
 STEP_NAME = "08_stim_response"
+ROI_METADATA_COLUMNS = [
+    "source_roi_id",
+    "roi_source",
+    "roi_type",
+    "manual_roi_id",
+    "suite2p_original_id",
+    "previous_suite2p_original_id",
+    "stat_index",
+]
 STEP_OUTPUT_PATTERNS = (
     "*_stim_response_table.csv",
     "*_roi_response_summary.csv",
@@ -254,8 +263,10 @@ def build_response_tables(
         dtype=np.float32,
     )
 
+    roi_id_columns = ["trial_id", "roi_id"] + [col for col in ROI_METADATA_COLUMNS if col in roi_table.columns]
+
     if stim_events.empty or "start_time_sec" not in stim_events.columns:
-        empty_summary = roi_table[["trial_id", "roi_id", "suite2p_original_id"]].copy()
+        empty_summary = roi_table[roi_id_columns].copy()
         empty_summary["response_type"] = "no_stim"
         return pd.DataFrame(), empty_summary, pd.DataFrame(), tensor, empty_summary
 
@@ -280,6 +291,11 @@ def build_response_tables(
 
         for roi_idx in range(dff.shape[0]):
             trace = dff[roi_idx]
+            roi_metadata = {
+                col: roi_table.iloc[roi_idx][col]
+                for col in ROI_METADATA_COLUMNS
+                if col in roi_table.columns
+            }
             baseline = trace[baseline_start:baseline_end]
             response = trace[response_start:response_end]
             onset = trace[response_start:onset_end]
@@ -301,7 +317,7 @@ def build_response_tables(
                 {
                     "trial_id": trial.trial_id,
                     "roi_id": int(roi_table.iloc[roi_idx]["roi_id"]),
-                    "suite2p_original_id": int(roi_table.iloc[roi_idx]["suite2p_original_id"]),
+                    **roi_metadata,
                     "stim_index": int(stim.get("stim_index", stim_idx + 1)),
                     "stim_type": stim.get("stim_type", ""),
                     "pol_angle": stim.get("pol_angle", np.nan),
@@ -331,12 +347,13 @@ def build_response_tables(
 
     response_table = pd.DataFrame(rows)
     if response_table.empty:
-        roi_summary = roi_table[["trial_id", "roi_id", "suite2p_original_id"]].copy()
+        roi_summary = roi_table[roi_id_columns].copy()
         roi_summary["response_type"] = "no_valid_stim"
         return response_table, roi_summary, pd.DataFrame(), tensor, roi_summary
 
+    group_cols = ["trial_id", "roi_id"] + [col for col in ROI_METADATA_COLUMNS if col in response_table.columns]
     roi_summary = (
-        response_table.groupby(["trial_id", "roi_id", "suite2p_original_id"], as_index=False)
+        response_table.groupby(group_cols, as_index=False)
         .agg(
             mean_response=("response_mean", "mean"),
             max_response=("response_peak", "max"),
@@ -465,6 +482,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--input-root", type=Path, help="Step-06 dF/F root. Default: OUTPUT_ROOT/06_dff.")
     parser.add_argument("--event-root", type=Path, help="Step-07 event root. Default: OUTPUT_ROOT/07_events.")
     parser.add_argument("--output-root", type=Path, help="Pipeline output root. Default: DATA_ROOT.")
+    parser.add_argument("--trial-id", help="Only process one trial ID, or a comma-separated list of trial IDs.")
     parser.add_argument("--action", choices=("skip", "overwrite"), default="skip")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--baseline-sec", type=float, default=5.0)
@@ -494,6 +512,9 @@ def main(argv: list[str] | None = None) -> int:
         LOGGER.error("Input root does not exist: %s", dff_root)
         return 1
     trials = discover_trials(dff_root, event_root)
+    if args.trial_id:
+        wanted = {item.strip() for item in args.trial_id.split(",") if item.strip()}
+        trials = [trial for trial in trials if trial.trial_id in wanted]
     summary = RunSummary(found=len(trials))
     rows: list[dict] = []
 

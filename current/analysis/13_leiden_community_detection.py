@@ -142,8 +142,22 @@ def load_optional_dependencies():
 def write_skipped_outputs(trial: TrialInput, out_dir: Path, reason: str) -> tuple[str, dict]:
     out_dir.mkdir(parents=True, exist_ok=True)
     features = pd.read_csv(trial.feature_matrix_path) if trial.feature_matrix_path and trial.feature_matrix_path.exists() else pd.DataFrame()
-    label_cols = [c for c in ("trial_id", "roi_id", "suite2p_original_id") if c in features.columns]
-    labels = features[label_cols].copy() if label_cols else pd.DataFrame(columns=["trial_id", "roi_id", "suite2p_original_id"])
+    label_cols = [
+        c
+        for c in (
+            "trial_id",
+            "roi_id",
+            "source_roi_id",
+            "roi_source",
+            "roi_type",
+            "manual_roi_id",
+            "suite2p_original_id",
+            "previous_suite2p_original_id",
+            "stat_index",
+        )
+        if c in features.columns
+    ]
+    labels = features[label_cols].copy() if label_cols else pd.DataFrame(columns=["trial_id", "roi_id"])
     labels["leiden_community"] = pd.Series(dtype="float")
     labels.to_csv(out_dir / f"{trial.trial_id}_leiden_labels.csv", index=False)
     pd.DataFrame(columns=["source_roi_id", "target_roi_id", "weight"]).to_csv(out_dir / f"{trial.trial_id}_graph_edges.csv", index=False)
@@ -244,7 +258,22 @@ def process_trial(trial: TrialInput, out_dir: Path, args: argparse.Namespace, ig
         seed=args.random_seed,
     )
     communities = np.asarray(partition.membership, dtype=int)
-    labels = features[["trial_id", "roi_id", "suite2p_original_id"]].copy()
+    label_cols = [
+        col
+        for col in (
+            "trial_id",
+            "roi_id",
+            "source_roi_id",
+            "roi_source",
+            "roi_type",
+            "manual_roi_id",
+            "suite2p_original_id",
+            "previous_suite2p_original_id",
+            "stat_index",
+        )
+        if col in features.columns
+    ]
+    labels = features[label_cols].copy()
     labels["leiden_community"] = communities
     labels.to_csv(out_dir / f"{trial.trial_id}_leiden_labels.csv", index=False)
     graph_edges_df = edges.rename(columns={"similarity": "weight"}).copy()

@@ -576,6 +576,53 @@ def stat_xy(roi) -> tuple[float, float, int]:
     return float(x_mean), float(y_mean), 0
 
 
+def safe_int(value, default: int = -1) -> int:
+    try:
+        if value is None:
+            return default
+        out = int(value)
+        return out
+    except Exception:
+        return default
+
+
+def stat_roi_metadata(roi: object, stat_index: int) -> dict:
+    if not isinstance(roi, dict):
+        return {
+            "roi_source": "suite2p",
+            "roi_type": "suite2p",
+            "manual_roi_id": -1,
+            "suite2p_original_id": int(stat_index),
+            "previous_suite2p_original_id": -1,
+            "source_roi_id": f"suite2p_{int(stat_index)}",
+        }
+
+    roi_source = str(roi.get("roi_source", "") or "").strip()
+    if roi_source in {"suite2p_reference", "suite2p"} or (not roi_source and "manual_roi_id" not in roi):
+        suite2p_id = safe_int(roi.get("suite2p_original_id"), int(stat_index))
+        return {
+            "roi_source": "suite2p",
+            "roi_type": str(roi.get("roi_type", "suite2p") or "suite2p"),
+            "manual_roi_id": -1,
+            "suite2p_original_id": suite2p_id,
+            "previous_suite2p_original_id": -1,
+            "source_roi_id": str(roi.get("source_roi_id", f"suite2p_{suite2p_id}") or f"suite2p_{suite2p_id}"),
+        }
+
+    manual_id = safe_int(roi.get("manual_roi_id"), int(stat_index) + 1)
+    previous_suite2p_id = safe_int(roi.get("previous_suite2p_original_id"), -1)
+    if previous_suite2p_id < 0:
+        previous_suite2p_id = safe_int(roi.get("suite2p_original_id"), -1)
+    return {
+        "roi_source": "manual",
+        "roi_type": str(roi.get("roi_type", "manual") or "manual"),
+        "manual_roi_id": manual_id,
+        "suite2p_original_id": -1,
+        "previous_suite2p_original_id": previous_suite2p_id,
+        "source_roi_id": str(roi.get("source_roi_id", f"manual_{manual_id}") or f"manual_{manual_id}"),
+    }
+
+
 def build_roi_table(
     trial_id: str,
     selected: np.ndarray,
@@ -590,8 +637,10 @@ def build_roi_table(
 ) -> pd.DataFrame:
     rows = []
     f0_stat = f0 if f0.shape == dff.shape else np.repeat(f0, dff.shape[1], axis=1)
-    for out_idx, suite2p_idx in enumerate(selected):
-        x_mean, y_mean, npix = stat_xy(stat[suite2p_idx])
+    for out_idx, stat_idx in enumerate(selected):
+        roi_stat = stat[int(stat_idx)]
+        x_mean, y_mean, npix = stat_xy(roi_stat)
+        metadata = stat_roi_metadata(roi_stat, int(stat_idx))
         trace = dff[out_idx]
         std_dff = float(np.nanstd(trace))
         max_dff = float(np.nanmax(trace))
@@ -599,9 +648,15 @@ def build_roi_table(
             {
                 "trial_id": trial_id,
                 "roi_id": out_idx + 1,
-                "suite2p_original_id": int(suite2p_idx),
-                "iscell": int(bool(iscell_flag[suite2p_idx])),
-                "iscell_prob": float(iscell_prob[suite2p_idx]) if np.isfinite(iscell_prob[suite2p_idx]) else np.nan,
+                "source_roi_id": metadata["source_roi_id"],
+                "roi_source": metadata["roi_source"],
+                "roi_type": metadata["roi_type"],
+                "manual_roi_id": metadata["manual_roi_id"],
+                "suite2p_original_id": metadata["suite2p_original_id"],
+                "previous_suite2p_original_id": metadata["previous_suite2p_original_id"],
+                "stat_index": int(stat_idx),
+                "iscell": int(bool(iscell_flag[stat_idx])),
+                "iscell_prob": float(iscell_prob[stat_idx]) if np.isfinite(iscell_prob[stat_idx]) else np.nan,
                 "x_mean": x_mean,
                 "y_mean": y_mean,
                 "npix": npix,
@@ -741,8 +796,13 @@ def save_example_traces(
         mark_stimuli(ax, stim_events)
         ax.plot(time_axis, dff[idx], lw=0.9, color="tab:blue")
         row = roi_table.iloc[idx]
+        roi_source = str(row.get("roi_source", "suite2p"))
+        if roi_source == "manual":
+            source_label = f"manual {int(row.get('manual_roi_id', row['roi_id']))}"
+        else:
+            source_label = f"s2p {int(row.get('suite2p_original_id', idx))}"
         ax.set_ylabel(
-            f"ROI {int(row['roi_id'])}\ns2p {int(row['suite2p_original_id'])}",
+            f"ROI {int(row['roi_id'])}\n{source_label}",
             rotation=0,
             labelpad=36,
             va="center",
@@ -907,8 +967,32 @@ def process_trial(trial: TrialInput, out_dir: Path, args: argparse.Namespace) ->
         dpi=args.dpi,
     )
 
+    selected_records = roi_table[
+        [
+            "roi_id",
+            "source_roi_id",
+            "roi_source",
+            "roi_type",
+            "manual_roi_id",
+            "suite2p_original_id",
+            "previous_suite2p_original_id",
+            "stat_index",
+        ]
+    ].to_dict(orient="records")
     with (out_dir / f"{trial.trial_id}_dff_summary.json").open("w", encoding="utf-8") as handle:
-        json.dump({**summary, "selected_suite2p_indices": selected.astype(int).tolist()}, handle, indent=2)
+        json.dump(
+            {
+                **summary,
+                "selected_roi_records": selected_records,
+                "selected_suite2p_indices": [
+                    int(value)
+                    for value in roi_table["suite2p_original_id"].tolist()
+                    if pd.notna(value) and int(value) >= 0
+                ],
+            },
+            handle,
+            indent=2,
+        )
     return "processed", summary
 
 
@@ -918,6 +1002,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--input-root", type=Path, help="Step-05 suite2p root. Default: OUTPUT_ROOT/05_suite2p_roi_detection.")
     parser.add_argument("--manual-root", type=Path, help="Manual ROI curation root. Default: OUTPUT_ROOT/05e_roi_manual_curation.")
     parser.add_argument("--output-root", type=Path, help="Pipeline output root. Default: DATA_ROOT.")
+    parser.add_argument("--trial-id", help="Only process one trial ID, or a comma-separated list of trial IDs.")
     parser.add_argument("--action", choices=("skip", "overwrite"), default="skip", help="Existing-output behavior.")
     parser.add_argument("--dry-run", action="store_true", help="Print work plan without reading suite2p arrays or writing files.")
     parser.add_argument(
@@ -980,6 +1065,9 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     trials = discover_trials(input_root)
+    if args.trial_id:
+        wanted = {item.strip() for item in args.trial_id.split(",") if item.strip()}
+        trials = [trial for trial in trials if trial.trial_id in wanted]
     summary = RunSummary(found=len(trials))
     rows: list[dict] = []
 

@@ -144,7 +144,7 @@ python3 current/run_pipeline.py \
   --action skip
 ```
 
-05 默认用 `04_spatial_highpass` 跑 suite2p，因为 high-pass 图更适合找 ROI 边界。manual GUI 保存人工校对结果后，06 会优先读取 manual 的最终 ROI set；没有 manual 结果的 trial 才回退到 suite2p `iscell.npy`。无论 ROI 来源是哪一个，06 都默认从 `03_motion_correct` 重新抽 F、Fneu 和 dF/F。
+05 默认用 `03_motion_correct` 跑 suite2p；`04_spatial_highpass` 仍然生成，主要给 manual GUI 显示 ROI 边界。manual GUI 保存人工校对结果后，06 会优先读取 manual 的最终 ROI set；没有 manual 结果的 trial 才回退到 suite2p `iscell.npy`。无论 ROI 来源是哪一个，06 都默认从 `03_motion_correct` 重新抽 F、Fneu 和 dF/F。
 
 ## 一口气跑后半段
 
@@ -228,7 +228,7 @@ python3 current/run_pipeline.py \
 
 用 suite2p 做 ROI detection。现在它主要负责生成 ROI 候选库，不再负责最终可信分类。
 
-默认输入是 `04_spatial_highpass`，因为 high-pass 底片更容易让 suite2p 找到局部边界。
+默认输入是 `03_motion_correct`。`04_spatial_highpass` 仍然会生成，主要用于 manual GUI 里看 ROI 边界。
 
 注意：目前更推荐 suite2p `0.14.4`。之前 `0.14.5` 在这批数据上出现过异常 ROI 行为。
 

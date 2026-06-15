@@ -121,7 +121,18 @@ def clean_step_outputs(out_dir: Path) -> int:
 
 
 def numeric_feature_matrix(df: pd.DataFrame) -> tuple[np.ndarray, list[str]]:
-    skip = {"trial_id", "roi_id", "suite2p_original_id", "response_type"}
+    skip = {
+        "trial_id",
+        "roi_id",
+        "source_roi_id",
+        "roi_source",
+        "roi_type",
+        "manual_roi_id",
+        "suite2p_original_id",
+        "previous_suite2p_original_id",
+        "stat_index",
+        "response_type",
+    }
     cols = [c for c in df.columns if c not in skip]
     numeric = df[cols].apply(pd.to_numeric, errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0)
     return numeric.to_numpy(dtype=np.float32), list(numeric.columns)
@@ -222,7 +233,22 @@ def process_trial(trial: TrialInput, out_dir: Path, args: argparse.Namespace) ->
     labels = fcluster(linkage_matrix, t=args.n_clusters, criterion="maxclust").astype(int)
     order = leaves_list(linkage_matrix)
 
-    labels_df = features[["trial_id", "roi_id", "suite2p_original_id"]].copy()
+    label_cols = [
+        col
+        for col in (
+            "trial_id",
+            "roi_id",
+            "source_roi_id",
+            "roi_source",
+            "roi_type",
+            "manual_roi_id",
+            "suite2p_original_id",
+            "previous_suite2p_original_id",
+            "stat_index",
+        )
+        if col in features.columns
+    ]
+    labels_df = features[label_cols].copy()
     labels_df["hierarchical_cluster"] = labels
     labels_df.to_csv(out_dir / f"{trial.trial_id}_hierarchical_cluster_labels.csv", index=False)
     cluster_summary = labels_df.groupby("hierarchical_cluster", as_index=False).agg(n_roi=("roi_id", "count"))

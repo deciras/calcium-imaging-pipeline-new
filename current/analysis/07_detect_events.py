@@ -26,8 +26,19 @@ import pandas as pd
 
 
 LOGGER = logging.getLogger("detect_events")
+EVENT_SHADE_COLOR = "#7b61ff"
+EVENT_SHADE_ALPHA = 0.14
 
 STEP_NAME = "07_events"
+ROI_METADATA_COLUMNS = [
+    "source_roi_id",
+    "roi_source",
+    "roi_type",
+    "manual_roi_id",
+    "suite2p_original_id",
+    "previous_suite2p_original_id",
+    "stat_index",
+]
 STEP_OUTPUT_PATTERNS = (
     "*_event_table.csv",
     "*_event_binary.npy",
@@ -39,6 +50,7 @@ STEP_OUTPUT_PATTERNS = (
     "*_event_raster.pdf",
     "*_event_examples.png",
     "*_event_examples.pdf",
+    "event_examples_by_roi",
     "*_metadata.json",
     "*_stim_events.csv",
     "*_stim_map.csv",
@@ -353,27 +365,30 @@ def build_event_outputs(
         trace = np.asarray(dff[roi_idx], dtype=np.float32)
         events = detect_events_for_trace(trace, fps=fps, args=args)
         roi_id = int(roi_table.iloc[roi_idx]["roi_id"]) if roi_idx < len(roi_table) and "roi_id" in roi_table else roi_idx + 1
-        suite2p_id = (
-            int(roi_table.iloc[roi_idx]["suite2p_original_id"])
-            if roi_idx < len(roi_table) and "suite2p_original_id" in roi_table
-            else roi_idx
-        )
+        roi_metadata = {
+            col: roi_table.iloc[roi_idx][col]
+            for col in ROI_METADATA_COLUMNS
+            if roi_idx < len(roi_table) and col in roi_table
+        }
+        suite2p_id = int(roi_metadata.get("suite2p_original_id", -1))
         for event_id, event in enumerate(events, start=1):
             onset = event["onset_frame"]
+            peak = event["peak_frame"]
             offset = event["offset_frame"]
-            binary[roi_idx, onset] = 1
+            binary[roi_idx, peak] = 1
             mask[roi_idx, onset : offset + 1] = 1
             event_rows.append(
                 {
                     "trial_id": trial_id,
                     "roi_id": roi_id,
+                    **roi_metadata,
                     "suite2p_original_id": suite2p_id,
                     "event_id": event_id,
                     "onset_frame": onset,
-                    "peak_frame": event["peak_frame"],
+                    "peak_frame": peak,
                     "offset_frame": offset,
                     "onset_sec": onset / fps,
-                    "peak_sec": event["peak_frame"] / fps,
+                    "peak_sec": peak / fps,
                     "offset_sec": offset / fps,
                     "amplitude": event["amplitude"],
                     "prominence": event["prominence"],
@@ -390,6 +405,7 @@ def build_event_outputs(
             {
                 "trial_id": trial_id,
                 "roi_id": roi_id,
+                **roi_metadata,
                 "suite2p_original_id": suite2p_id,
                 "n_events": len(events),
                 "event_rate_hz": len(events) / (n_frames / fps),
@@ -466,9 +482,47 @@ def save_event_raster(
         plt.close(fig)
 
 
+def contiguous_spans(flags: np.ndarray) -> list[tuple[int, int]]:
+    flags = np.asarray(flags, dtype=bool)
+    if flags.size == 0 or not np.any(flags):
+        return []
+    starts = np.flatnonzero(flags & np.r_[True, ~flags[:-1]])
+    ends = np.flatnonzero(flags & np.r_[~flags[1:], True])
+    return [(int(start), int(end)) for start, end in zip(starts, ends)]
+
+
+def roi_label(roi_table: pd.DataFrame, roi_idx: int) -> str:
+    roi_id = int(roi_table.iloc[roi_idx]["roi_id"]) if roi_idx < len(roi_table) and "roi_id" in roi_table else roi_idx + 1
+    return f"ROI {roi_id}"
+
+
+def plot_roi_event_trace(
+    ax,
+    trace: np.ndarray,
+    peak_binary: np.ndarray,
+    event_mask: np.ndarray,
+    roi_table: pd.DataFrame,
+    roi_idx: int,
+    fps: float,
+    stim_events: pd.DataFrame,
+) -> None:
+    time_axis = np.arange(trace.shape[0]) / fps
+    mark_stimuli(ax, stim_events)
+    for start, end in contiguous_spans(event_mask > 0):
+        ax.axvspan(start / fps, (end + 1) / fps, color=EVENT_SHADE_COLOR, alpha=EVENT_SHADE_ALPHA, lw=0)
+    ax.plot(time_axis, trace, lw=0.9, color="tab:blue")
+    peak_frames = np.flatnonzero(peak_binary > 0)
+    if len(peak_frames):
+        ax.scatter(peak_frames / fps, trace[peak_frames], s=18, color="tab:red", zorder=3)
+    ax.set_ylabel(roi_label(roi_table, roi_idx), rotation=0, labelpad=28, va="center")
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+
 def save_event_examples(
     dff: np.ndarray,
     binary: np.ndarray,
+    mask: np.ndarray,
     roi_table: pd.DataFrame,
     fps: float,
     stim_events: pd.DataFrame,
@@ -488,20 +542,11 @@ def save_event_examples(
     if not choices:
         return
 
-    time_axis = np.arange(dff.shape[1]) / fps
     fig, axes = plt.subplots(len(choices), 1, figsize=(12, max(3, 2.1 * len(choices))), sharex=True)
     if len(choices) == 1:
         axes = [axes]
     for ax, idx in zip(axes, choices):
-        mark_stimuli(ax, stim_events)
-        ax.plot(time_axis, dff[idx], lw=0.9, color="tab:blue")
-        event_frames = np.flatnonzero(binary[idx] > 0)
-        if len(event_frames):
-            ax.scatter(event_frames / fps, dff[idx, event_frames], s=18, color="tab:red", zorder=3)
-        roi_id = int(roi_table.iloc[idx]["roi_id"]) if idx < len(roi_table) and "roi_id" in roi_table else idx + 1
-        ax.set_ylabel(f"ROI {roi_id}", rotation=0, labelpad=28, va="center")
-        ax.spines["top"].set_visible(False)
-        ax.spines["right"].set_visible(False)
+        plot_roi_event_trace(ax, dff[idx], binary[idx], mask[idx], roi_table, idx, fps, stim_events)
     axes[-1].set_xlabel("Time (s)")
     fig.suptitle(f"Calcium event examples - {trial_id}", y=0.995)
     plt.tight_layout()
@@ -510,6 +555,33 @@ def save_event_examples(
         fig.savefig(output_path.with_suffix(".pdf"), bbox_inches="tight")
     finally:
         plt.close(fig)
+
+
+def save_all_roi_event_pdfs(
+    dff: np.ndarray,
+    binary: np.ndarray,
+    mask: np.ndarray,
+    roi_table: pd.DataFrame,
+    fps: float,
+    stim_events: pd.DataFrame,
+    output_dir: Path,
+    trial_id: str,
+    dpi: int,
+) -> None:
+    import matplotlib.pyplot as plt
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for roi_idx in range(dff.shape[0]):
+        label = roi_label(roi_table, roi_idx).replace(" ", "_")
+        fig, ax = plt.subplots(figsize=(12, 3.2))
+        plot_roi_event_trace(ax, dff[roi_idx], binary[roi_idx], mask[roi_idx], roi_table, roi_idx, fps, stim_events)
+        ax.set_xlabel("Time (s)")
+        ax.set_title(f"{trial_id} - {roi_label(roi_table, roi_idx)}")
+        fig.tight_layout()
+        try:
+            fig.savefig(output_dir / f"{trial_id}_{label}_event_example.pdf", dpi=dpi, bbox_inches="tight")
+        finally:
+            plt.close(fig)
 
 
 def process_trial(trial: TrialInput, out_dir: Path, args: argparse.Namespace) -> tuple[str, dict]:
@@ -573,6 +645,7 @@ def process_trial(trial: TrialInput, out_dir: Path, args: argparse.Namespace) ->
     save_event_examples(
         dff=dff,
         binary=event_binary,
+        mask=event_mask,
         roi_table=roi_table,
         fps=fps,
         stim_events=stim_events,
@@ -581,6 +654,18 @@ def process_trial(trial: TrialInput, out_dir: Path, args: argparse.Namespace) ->
         seed=args.random_seed,
         dpi=args.dpi,
     )
+    if not args.no_per_roi_pdfs:
+        save_all_roi_event_pdfs(
+            dff=dff,
+            binary=event_binary,
+            mask=event_mask,
+            roi_table=roi_table,
+            fps=fps,
+            stim_events=stim_events,
+            output_dir=out_dir / "event_examples_by_roi",
+            trial_id=trial.trial_id,
+            dpi=args.dpi,
+        )
     return "processed", summary
 
 
@@ -589,6 +674,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--data-root", type=Path, required=True, help="Original data root.")
     parser.add_argument("--input-root", type=Path, help="Step-06 dF/F root. Default: OUTPUT_ROOT/06_dff.")
     parser.add_argument("--output-root", type=Path, help="Pipeline output root. Default: DATA_ROOT.")
+    parser.add_argument("--trial-id", help="Only process one trial ID, or a comma-separated list of trial IDs.")
     parser.add_argument("--action", choices=("skip", "overwrite"), default="skip", help="Existing-output behavior.")
     parser.add_argument("--dry-run", action="store_true", help="Print work plan without reading dF/F arrays or writing files.")
     parser.add_argument("--event-method", choices=("robust-threshold", "find-peaks"), default="robust-threshold")
@@ -601,6 +687,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--default-fps", type=float, default=2.0)
     parser.add_argument("--raster-max-rois", type=int, default=500)
     parser.add_argument("--dpi", type=int, default=150)
+    parser.add_argument("--no-per-roi-pdfs", action="store_true", help="Skip per-ROI event example PDFs.")
     parser.add_argument("--random-seed", type=int, default=0)
     parser.add_argument("--verbose", action="store_true")
     return parser
@@ -624,6 +711,9 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     trials = discover_trials(input_root)
+    if args.trial_id:
+        wanted = {item.strip() for item in args.trial_id.split(",") if item.strip()}
+        trials = [trial for trial in trials if trial.trial_id in wanted]
     summary = RunSummary(found=len(trials))
     rows: list[dict] = []
 

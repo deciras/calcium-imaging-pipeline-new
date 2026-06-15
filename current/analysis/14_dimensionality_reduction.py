@@ -120,14 +120,41 @@ def clean_step_outputs(out_dir: Path) -> int:
 
 
 def numeric_features(df: pd.DataFrame) -> tuple[np.ndarray, list[str]]:
-    skip = {"trial_id", "roi_id", "suite2p_original_id", "response_type"}
+    skip = {
+        "trial_id",
+        "roi_id",
+        "source_roi_id",
+        "roi_source",
+        "roi_type",
+        "manual_roi_id",
+        "suite2p_original_id",
+        "previous_suite2p_original_id",
+        "stat_index",
+        "response_type",
+    }
     cols = [c for c in df.columns if c not in skip]
     numeric = df[cols].apply(pd.to_numeric, errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0)
     return numeric.to_numpy(dtype=np.float32), list(numeric.columns)
 
 
 def attach_labels(embedding: pd.DataFrame, feature_df: pd.DataFrame, cluster_path: Path | None) -> pd.DataFrame:
-    for col in ("trial_id", "roi_id", "suite2p_original_id", "preferred_angle", "max_response", "event_rate_hz", "response_type", "x_mean", "y_mean"):
+    for col in (
+        "trial_id",
+        "roi_id",
+        "source_roi_id",
+        "roi_source",
+        "roi_type",
+        "manual_roi_id",
+        "suite2p_original_id",
+        "previous_suite2p_original_id",
+        "stat_index",
+        "preferred_angle",
+        "max_response",
+        "event_rate_hz",
+        "response_type",
+        "x_mean",
+        "y_mean",
+    ):
         if col in feature_df.columns:
             embedding[col] = feature_df[col].values
     if cluster_path and cluster_path.exists():

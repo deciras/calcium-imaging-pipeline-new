@@ -35,7 +35,7 @@ python3 current/run_pipeline.py \
 
 重要逻辑：
 
-- 05 仍然默认用 `04_spatial_highpass` 跑 suite2p，因为 high-pass 图更适合找 ROI 边界。
+- 05 默认用 `03_motion_correct` 跑 suite2p；`04_spatial_highpass` 仍然生成，主要给 manual GUI 显示 ROI 边界。
 - 05 产生的 suite2p 结果只当作 ROI 位置和形状候选。
 - 06 默认优先读取 manual GUI 保存的最终 ROI set；没有 manual 结果的 trial 才回退到 suite2p `iscell.npy`。
 - 06 默认从 `03_motion_correct` 重新抽 F、Fneu 和 dF/F，不直接相信 high-pass 图上的 suite2p trace。

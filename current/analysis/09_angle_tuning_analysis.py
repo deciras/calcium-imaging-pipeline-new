@@ -17,6 +17,15 @@ import pandas as pd
 
 LOGGER = logging.getLogger("angle_tuning")
 STEP_NAME = "09_angle_tuning"
+ROI_METADATA_COLUMNS = [
+    "source_roi_id",
+    "roi_source",
+    "roi_type",
+    "manual_roi_id",
+    "suite2p_original_id",
+    "previous_suite2p_original_id",
+    "stat_index",
+]
 STEP_OUTPUT_PATTERNS = (
     "*_angle_response_table.csv",
     "*_angle_tuning_summary.csv",
@@ -174,7 +183,8 @@ def compute_angle_tables(response_table: pd.DataFrame, angle_period: float, z_th
     if response_table.empty:
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
-    grouped = response_table.groupby(["trial_id", "roi_id", "suite2p_original_id", "pol_angle"], as_index=False).agg(
+    group_cols = ["trial_id", "roi_id"] + [col for col in ROI_METADATA_COLUMNS if col in response_table.columns]
+    grouped = response_table.groupby(group_cols + ["pol_angle"], as_index=False).agg(
         mean_response=("delta_mean", "mean"),
         peak_response=("response_peak", "max"),
         mean_event_rate=("event_rate_response", "mean"),
@@ -184,7 +194,10 @@ def compute_angle_tables(response_table: pd.DataFrame, angle_period: float, z_th
     )
 
     preferred_rows = []
-    for (trial_id, roi_id, suite2p_id), group in grouped.groupby(["trial_id", "roi_id", "suite2p_original_id"]):
+    for group_key, group in grouped.groupby(group_cols):
+        if not isinstance(group_key, tuple):
+            group_key = (group_key,)
+        metadata = dict(zip(group_cols, group_key))
         group = group.sort_values("pol_angle")
         best_idx = group["mean_response"].idxmax()
         preferred_angle = float(group.loc[best_idx, "pol_angle"])
@@ -197,9 +210,7 @@ def compute_angle_tables(response_table: pd.DataFrame, angle_period: float, z_th
         vector_pref, vector_strength = circular_stats(group["pol_angle"].to_numpy(float), group["mean_response"].to_numpy(float), angle_period)
         preferred_rows.append(
             {
-                "trial_id": trial_id,
-                "roi_id": int(roi_id),
-                "suite2p_original_id": int(suite2p_id),
+                **metadata,
                 "preferred_angle": preferred_angle,
                 "vector_preferred_angle": vector_pref,
                 "preferred_response": preferred_response,
@@ -320,6 +331,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--data-root", type=Path, required=True)
     parser.add_argument("--input-root", type=Path, help="Step-08 root. Default: OUTPUT_ROOT/08_stim_response.")
     parser.add_argument("--output-root", type=Path, help="Pipeline output root. Default: DATA_ROOT.")
+    parser.add_argument("--trial-id", help="Only process one trial ID, or a comma-separated list of trial IDs.")
     parser.add_argument("--action", choices=("skip", "overwrite"), default="skip")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--angle-period", type=float, choices=(180.0, 360.0), default=180.0)
@@ -342,6 +354,9 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     trials = discover_trials(input_root)
+    if args.trial_id:
+        wanted = {item.strip() for item in args.trial_id.split(",") if item.strip()}
+        trials = [trial for trial in trials if trial.trial_id in wanted]
     summary = RunSummary(found=len(trials))
     rows = []
     LOGGER.info("Input root : %s", input_root)

@@ -17,6 +17,16 @@ import pandas as pd
 
 LOGGER = logging.getLogger("population_features")
 STEP_NAME = "10_population_features"
+ROI_METADATA_COLUMNS = [
+    "source_roi_id",
+    "roi_source",
+    "roi_type",
+    "manual_roi_id",
+    "suite2p_original_id",
+    "previous_suite2p_original_id",
+    "stat_index",
+]
+NON_FEATURE_COLUMNS = {"trial_id", "roi_id", "response_type", *ROI_METADATA_COLUMNS}
 STEP_OUTPUT_PATTERNS = (
     "*_roi_feature_matrix.csv",
     "*_roi_feature_matrix_zscored.csv",
@@ -155,7 +165,7 @@ def merge_optional(features: pd.DataFrame, table: pd.DataFrame, keep: list[str])
 
 def zscore_features(features: pd.DataFrame) -> pd.DataFrame:
     out = features.copy()
-    skip = {"trial_id", "roi_id", "suite2p_original_id", "response_type"}
+    skip = NON_FEATURE_COLUMNS
     for col in out.columns:
         if col in skip:
             continue
@@ -202,10 +212,19 @@ def process_trial(trial: TrialInput, out_dir: Path, args: argparse.Namespace) ->
     roi = pd.read_csv(trial.roi_table_path)
     dff = np.load(trial.dff_path, allow_pickle=True).astype(np.float32, copy=False)
 
-    features = roi[[
-        "trial_id", "roi_id", "suite2p_original_id", "x_mean", "y_mean", "npix",
-        "mean_dff", "std_dff", "max_dff", "snr_like",
-    ]].copy()
+    base_columns = [
+        "trial_id",
+        "roi_id",
+        *ROI_METADATA_COLUMNS,
+        "x_mean",
+        "y_mean",
+        "npix",
+        "mean_dff",
+        "std_dff",
+        "max_dff",
+        "snr_like",
+    ]
+    features = roi[[col for col in base_columns if col in roi.columns]].copy()
     features = add_trace_stats(features, dff)
     features = merge_optional(features, read_csv(trial.event_rate_path), ["event_rate_hz", "n_events", "mean_amplitude", "mean_duration_sec", "mean_auc"])
     features = merge_optional(features, read_csv(trial.response_summary_path), ["mean_response", "max_response", "mean_delta", "max_zscore", "mean_event_rate_response", "mean_latency_sec", "response_type"])

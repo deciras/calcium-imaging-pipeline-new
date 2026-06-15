@@ -125,7 +125,18 @@ def clean_step_outputs(out_dir: Path) -> int:
 
 
 def numeric_matrix(df: pd.DataFrame) -> np.ndarray:
-    skip = {"trial_id", "roi_id", "suite2p_original_id", "response_type"}
+    skip = {
+        "trial_id",
+        "roi_id",
+        "source_roi_id",
+        "roi_source",
+        "roi_type",
+        "manual_roi_id",
+        "suite2p_original_id",
+        "previous_suite2p_original_id",
+        "stat_index",
+        "response_type",
+    }
     cols = [c for c in df.columns if c not in skip]
     numeric = df[cols].apply(pd.to_numeric, errors="coerce")
     numeric = numeric.replace([np.inf, -np.inf], np.nan).fillna(0.0)

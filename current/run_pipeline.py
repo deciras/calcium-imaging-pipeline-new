@@ -60,6 +60,7 @@ class PipelineStep:
     accepts_clustering_options: bool = False
     accepts_leiden_options: bool = False
     accepts_roi_gui_options: bool = False
+    accepts_trial_id: bool = False
 
 
 # ``env=None`` means: run with the same Python that launched run_pipeline.py.
@@ -67,7 +68,7 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
     PipelineStep(
         step_id="00",
         name="organize OIR files",
-        script="00_oir_file_manager.py",
+        script="preprocess/00_oir_file_manager.py",
         accepts_data_root=True,
         accepts_layout=True,
         accepts_action=True,
@@ -76,7 +77,7 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
     PipelineStep(
         step_id="01",
         name="Fiji OIR to TIF",
-        script="01_fiji_totif_ini.py",
+        script="preprocess/01_fiji_totif_ini.py",
         env="fiji_env",
         accepts_data_root=True,
         accepts_action=True,
@@ -90,7 +91,7 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
     PipelineStep(
         step_id="02",
         name="generate stimulus map",
-        script="02_generate_stim_map.py",
+        script="preprocess/02_generate_stim_map.py",
         env="caiman",
         accepts_data_root=True,
         accepts_action=True,
@@ -103,7 +104,7 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
     PipelineStep(
         step_id="03",
         name="CaImAn motion correction",
-        script="03_motion_correct_func_caiman.py",
+        script="preprocess/03_motion_correct_func_caiman.py",
         env="caiman",
         accepts_data_root=True,
         accepts_action=True,
@@ -113,7 +114,7 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
     PipelineStep(
         step_id="04",
         name="spatial high-pass",
-        script="04_spatial_highpass.py",
+        script="preprocess/04_spatial_highpass.py",
         env="caiman",
         accepts_data_root=True,
         accepts_action=True,
@@ -126,7 +127,7 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
     PipelineStep(
         step_id="05",
         name="suite2p ROI detection",
-        script="05_suite2p_roi_detection_schema_aligned_connected.py",
+        script="roi/05_suite2p_roi_detection_schema_aligned_connected.py",
         env="suite2p",
         accepts_data_root=True,
         accepts_action=True,
@@ -137,59 +138,64 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
     PipelineStep(
         step_id="manual",
         name="manual ROI curation GUI",
-        script="05_manual_roi_curation_gui.py",
+        script="roi/05_manual_roi_curation_gui.py",
         env="caiman",
         accepts_data_root=True,
         accepts_roi_gui_options=True,
+        accepts_trial_id=True,
     ),
     PipelineStep(
         step_id="06",
         name="extract dF/F",
-        script="06_extract_dff.py",
+        script="analysis/06_extract_dff.py",
         env="caiman",
         accepts_data_root=True,
         accepts_action=True,
         accepts_step_dry_run=True,
         accepts_output_root=True,
         accepts_dff_options=True,
+        accepts_trial_id=True,
     ),
     PipelineStep(
         step_id="07",
         name="detect calcium events",
-        script="07_detect_events.py",
+        script="analysis/07_detect_events.py",
         env="caiman",
         accepts_data_root=True,
         accepts_action=True,
         accepts_step_dry_run=True,
         accepts_output_root=True,
         accepts_event_options=True,
+        accepts_trial_id=True,
     ),
     PipelineStep(
         step_id="08",
         name="stimulus response analysis",
-        script="08_stim_response_analysis.py",
+        script="analysis/08_stim_response_analysis.py",
         env="caiman",
         accepts_data_root=True,
         accepts_action=True,
         accepts_step_dry_run=True,
         accepts_output_root=True,
         accepts_stim_response_options=True,
+        accepts_trial_id=True,
     ),
     PipelineStep(
         step_id="09",
         name="angle tuning analysis",
-        script="09_angle_tuning_analysis.py",
+        script="analysis/09_angle_tuning_analysis.py",
         env="caiman",
         accepts_data_root=True,
         accepts_action=True,
         accepts_step_dry_run=True,
         accepts_output_root=True,
         accepts_angle_options=True,
+        accepts_trial_id=True,
     ),
     PipelineStep(
         step_id="10",
         name="population features",
-        script="10_population_features.py",
+        script="analysis/10_population_features.py",
         env="caiman",
         accepts_data_root=True,
         accepts_action=True,
@@ -199,7 +205,7 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
     PipelineStep(
         step_id="11",
         name="population similarity",
-        script="11_population_similarity.py",
+        script="analysis/11_population_similarity.py",
         env="caiman",
         accepts_data_root=True,
         accepts_action=True,
@@ -210,7 +216,7 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
     PipelineStep(
         step_id="12",
         name="hierarchical clustering",
-        script="12_hierarchical_clustering.py",
+        script="analysis/12_hierarchical_clustering.py",
         env="caiman",
         accepts_data_root=True,
         accepts_action=True,
@@ -221,7 +227,7 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
     PipelineStep(
         step_id="13",
         name="Leiden community detection",
-        script="13_leiden_community_detection.py",
+        script="analysis/13_leiden_community_detection.py",
         env="caiman",
         accepts_data_root=True,
         accepts_action=True,
@@ -232,7 +238,7 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
     PipelineStep(
         step_id="14",
         name="dimensionality reduction",
-        script="14_dimensionality_reduction.py",
+        script="analysis/14_dimensionality_reduction.py",
         env="caiman",
         accepts_data_root=True,
         accepts_action=True,
@@ -242,7 +248,7 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
     PipelineStep(
         step_id="15",
         name="cross-trial summary",
-        script="15_cross_trial_summary.py",
+        script="analysis/15_cross_trial_summary.py",
         env="caiman",
         accepts_data_root=True,
         accepts_action=True,
@@ -252,7 +258,7 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
     PipelineStep(
         step_id="16",
         name="report generation",
-        script="16_report_generator.py",
+        script="analysis/16_report_generator.py",
         env="caiman",
         accepts_data_root=True,
         accepts_action=True,
@@ -326,6 +332,9 @@ def parse_step_selector(raw_selector: str | None) -> set[str] | None:
         "premanual": {"00", "01", "02", "03", "04", "05"},
         "pre-manual": {"00", "01", "02", "03", "04", "05"},
         "before-manual": {"00", "01", "02", "03", "04", "05"},
+        "basic-analysis": {"06", "07", "08", "09"},
+        "basicanalysis": {"06", "07", "08", "09"},
+        "basic": {"06", "07", "08", "09"},
         "postmanual": {"06", "07", "08", "09", "10", "11", "12", "13", "14", "15", "16"},
         "post-manual": {"06", "07", "08", "09", "10", "11", "12", "13", "14", "15", "16"},
         "after-manual": {"06", "07", "08", "09", "10", "11", "12", "13", "14", "15", "16"},
@@ -482,6 +491,9 @@ def build_managed_step_args(
     if step_dry_run and step.accepts_step_dry_run:
         managed_args.append("--dry-run")
 
+    if trial_id is not None and step.accepts_trial_id:
+        managed_args.extend(["--trial-id", trial_id])
+
     if fiji_memory and step.accepts_fiji_memory:
         managed_args.extend(["--fiji-memory", fiji_memory])
 
@@ -541,7 +553,6 @@ def build_managed_step_args(
 
     if step.accepts_roi_gui_options:
         roi_gui_options = (
-            ("--trial-id", trial_id),
             ("--movie-kind", movie_kind),
             ("--neuropil-coeff", neuropil_coeff),
             ("--f0-percentile", f0_percentile),

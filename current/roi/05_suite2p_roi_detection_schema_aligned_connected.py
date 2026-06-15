@@ -4,7 +4,7 @@
 Conservative suite2p ROI detection.
 
 Default layout:
-  input : DATA_ROOT/04_spatial_highpass/
+  input : DATA_ROOT/03_motion_correct/
   output         : DATA_ROOT/05_suite2p_roi_detection/
 
 The input movies are not modified. suite2p outputs are written into this step's
@@ -89,7 +89,7 @@ def default_output_root(data_root: Path) -> Path:
 
 
 def default_input_root(output_root: Path) -> Path:
-    return output_root / "04_spatial_highpass"
+    return output_root / "03_motion_correct"
 
 
 def step_output_root(output_root: Path) -> Path:
@@ -541,7 +541,7 @@ def payload_for_trial(trial: TrialInput, out_dir: Path, args: argparse.Namespace
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run conservative suite2p ROI detection.")
     parser.add_argument("--data-root", type=Path, required=True, help="Original data root.")
-    parser.add_argument("--input-root", type=Path, help="Movie root. Default: 04_spatial_highpass.")
+    parser.add_argument("--input-root", type=Path, help="Movie root. Default: 03_motion_correct.")
     parser.add_argument("--output-root", type=Path, help="Pipeline output root. Default: DATA_ROOT.")
     parser.add_argument("--action", choices=("skip", "overwrite"), default="skip", help="Existing-output behavior.")
     parser.add_argument("--dry-run", action="store_true", help="Print work plan without running suite2p.")
@@ -551,9 +551,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--suite2p-threads", type=int, default=8, help="suite2p nthreads setting.")
     parser.add_argument("--batch-size", type=int, default=500)
     parser.add_argument("--min-frames", type=int, default=2)
-    parser.add_argument("--cell-diameter-um", type=float, default=5.0)
-    parser.add_argument("--min-diameter-px", type=int, default=4)
-    parser.add_argument("--diameter-scale", type=float, default=1.2)
+    parser.add_argument("--cell-diameter-um", type=float, default=8.0)
+    parser.add_argument("--min-diameter-px", type=int, default=8)
+    parser.add_argument("--diameter-scale", type=float, default=1.3)
     parser.add_argument("--threshold-scaling", type=float, default=1.2)
     parser.add_argument("--max-overlap", type=float, default=0.5)
     parser.add_argument("--snr-thresh", type=float, default=1.5)

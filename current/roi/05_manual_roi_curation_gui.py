@@ -5,8 +5,8 @@ Desktop GUI for manual ROI curation after suite2p.
 
 The GUI is intentionally conservative:
 - it does not edit suite2p outputs in place
-- rejecting an existing ROI only writes a new manual iscell file
-- drawing a ROI writes separate manual ROI files
+- selected suite2p candidates and drawn ROIs are saved as a manual ROI set
+- temporary removals are kept only in the current GUI session
 """
 
 from __future__ import annotations
@@ -25,9 +25,10 @@ import tifffile as tf
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from matplotlib.path import Path as MplPath
-from PySide6.QtCore import QPoint, QPointF, QRect, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QItemSelectionModel, QPoint, QPointF, QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
     QCheckBox,
     QComboBox,
@@ -44,6 +45,8 @@ from PySide6.QtWidgets import (
     QSlider,
     QSpinBox,
     QStatusBar,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -247,7 +250,12 @@ def ellipse_points(start: tuple[float, float], end: tuple[float, float], n_point
     return [(float(cx + rx * np.cos(t)), float(cy + ry * np.sin(t))) for t in theta]
 
 
-def annulus_mask(roi_mask: np.ndarray, inner_px: int = 3, outer_px: int = 12) -> np.ndarray:
+def annulus_mask(
+    roi_mask: np.ndarray,
+    inner_px: int = 3,
+    outer_px: int = 12,
+    exclusion_mask: np.ndarray | None = None,
+) -> np.ndarray:
     try:
         from scipy import ndimage as ndi
     except Exception:
@@ -255,7 +263,10 @@ def annulus_mask(roi_mask: np.ndarray, inner_px: int = 3, outer_px: int = 12) ->
 
     outer = ndi.binary_dilation(roi_mask, iterations=max(int(outer_px), 1))
     inner = ndi.binary_dilation(roi_mask, iterations=max(int(inner_px), 1))
-    return outer & ~inner
+    neuropil = outer & ~inner
+    if exclusion_mask is not None and exclusion_mask.shape == roi_mask.shape:
+        neuropil &= ~exclusion_mask
+    return neuropil
 
 
 def suite2p_roi_boundary(ypix: np.ndarray, xpix: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -290,6 +301,17 @@ def stat_dict_from_mask(mask: np.ndarray, roi_id: int) -> dict:
         "overlap": np.zeros(len(xpix), dtype=bool),
         "manual_roi_id": int(roi_id),
     }
+
+
+def final_roi_sort_key(stat_entry: dict) -> tuple[float, float, int]:
+    ypix = np.asarray(stat_entry.get("ypix", []), dtype=float)
+    xpix = np.asarray(stat_entry.get("xpix", []), dtype=float)
+    if ypix.size and xpix.size:
+        return (float(np.mean(ypix)), float(np.mean(xpix)), -int(len(xpix)))
+    med = stat_entry.get("med", [np.inf, np.inf])
+    y_mean = float(med[0]) if len(med) > 0 and np.isfinite(med[0]) else np.inf
+    x_mean = float(med[1]) if len(med) > 1 and np.isfinite(med[1]) else np.inf
+    return (y_mean, x_mean, -int(stat_entry.get("npix", 0)))
 
 
 def imagej_polygon_roi_bytes(points: list[tuple[float, float]], roi_name: str = "") -> bytes:
@@ -331,6 +353,7 @@ class VideoCanvas(QLabel):
     double_clicked = Signal(float, float, object)
     dragged = Signal(float, float, object)
     released = Signal(float, float, object)
+    view_changed = Signal(float, float, float)
 
     def __init__(self) -> None:
         super().__init__()
@@ -340,8 +363,31 @@ class VideoCanvas(QLabel):
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._image_shape = (1, 1)
         self._pixmap_rect = QRect()
+        self._source_pixmap: QPixmap | None = None
+        self._zoom = 1.0
+        self._min_zoom = 0.1
+        self._max_zoom = 20.0
+        self._center_x = 0.5
+        self._center_y = 0.5
+        self._syncing_view = False
+        self._pan_enabled = False
+        self._panning = False
+        self._last_pan_point: QPoint | None = None
+
+    def set_pan_enabled(self, enabled: bool) -> None:
+        self._pan_enabled = bool(enabled)
+        if self._pan_enabled:
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
+        else:
+            self.unsetCursor()
 
     def mousePressEvent(self, event) -> None:  # type: ignore[override]
+        if self._should_start_pan(event):
+            self._panning = True
+            self._last_pan_point = event.position().toPoint()
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            event.accept()
+            return
         mapped = self.map_event_to_image(event)
         if mapped is None:
             return
@@ -356,6 +402,13 @@ class VideoCanvas(QLabel):
         self.double_clicked.emit(float(x), float(y), event.button())
 
     def mouseMoveEvent(self, event) -> None:  # type: ignore[override]
+        if self._panning and self._last_pan_point is not None:
+            point = event.position().toPoint()
+            delta = point - self._last_pan_point
+            self._last_pan_point = point
+            self.pan_by_screen_delta(delta.x(), delta.y(), emit=True)
+            event.accept()
+            return
         mapped = self.map_event_to_image(event)
         if mapped is None:
             return
@@ -363,6 +416,12 @@ class VideoCanvas(QLabel):
         self.dragged.emit(float(x), float(y), event.buttons())
 
     def mouseReleaseEvent(self, event) -> None:  # type: ignore[override]
+        if self._panning:
+            self._panning = False
+            self._last_pan_point = None
+            self.setCursor(Qt.CursorShape.OpenHandCursor if self._pan_enabled else Qt.CursorShape.ArrowCursor)
+            event.accept()
+            return
         mapped = self.map_event_to_image(event)
         if mapped is None:
             return
@@ -380,12 +439,159 @@ class VideoCanvas(QLabel):
         return float(x), float(y)
 
     def set_rendered_pixmap(self, pixmap: QPixmap, image_shape: tuple[int, int]) -> None:
+        previous_shape = self._image_shape
         self._image_shape = image_shape
-        scaled = pixmap.scaled(self.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-        left = (self.width() - scaled.width()) // 2
-        top = (self.height() - scaled.height()) // 2
-        self._pixmap_rect = QRect(left, top, scaled.width(), scaled.height())
-        self.setPixmap(scaled)
+        self._source_pixmap = pixmap
+        if previous_shape != image_shape:
+            self.reset_view(emit=False)
+        self._render_current_pixmap()
+
+    def set_view(self, zoom: float, center_x: float, center_y: float, emit: bool = False) -> None:
+        self._zoom = float(np.clip(zoom, self._min_zoom, self._max_zoom))
+        self._center_x = float(center_x)
+        self._center_y = float(center_y)
+        self._clamp_center()
+        self._render_current_pixmap()
+        if emit and not self._syncing_view:
+            self.view_changed.emit(self._zoom, self._center_x, self._center_y)
+
+    def reset_view(self, emit: bool = True) -> None:
+        height, width = self._image_shape
+        self.set_view(1.0, width / 2.0, height / 2.0, emit=emit)
+
+    def sync_view(self, zoom: float, center_x: float, center_y: float) -> None:
+        self._syncing_view = True
+        try:
+            self.set_view(zoom, center_x, center_y, emit=False)
+        finally:
+            self._syncing_view = False
+
+    def resizeEvent(self, event) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        self._clamp_center()
+        self._render_current_pixmap()
+
+    def wheelEvent(self, event) -> None:  # type: ignore[override]
+        modifiers = event.modifiers()
+        is_zoom = modifiers & Qt.KeyboardModifier.ControlModifier or modifiers & Qt.KeyboardModifier.MetaModifier
+        angle_delta = event.angleDelta()
+        pixel_delta = event.pixelDelta()
+        if is_zoom:
+            delta = angle_delta.y() or pixel_delta.y()
+            if delta == 0:
+                event.accept()
+                return
+            factor = float(np.clip(1.0015 ** delta, 0.5, 2.0))
+            self.zoom_by(factor, event.position().toPoint())
+            event.accept()
+            return
+
+        dx = pixel_delta.x() or angle_delta.x() / 4.0
+        dy = pixel_delta.y() or angle_delta.y() / 4.0
+        if self._zoom > 1.0 and (dx != 0 or dy != 0):
+            self.pan_by_screen_delta(float(dx), float(dy), emit=True)
+            event.accept()
+            return
+        event.ignore()
+
+    def event(self, event) -> bool:  # type: ignore[override]
+        if event.type() == QEvent.Type.NativeGesture:
+            try:
+                if event.gestureType() == Qt.NativeGestureType.ZoomNativeGesture:
+                    factor = 1.0 + float(event.value())
+                    if factor > 0:
+                        self.zoom_by(factor, event.position().toPoint())
+                        return True
+            except AttributeError:
+                pass
+        return super().event(event)
+
+    def zoom_by(self, factor: float, anchor: QPoint) -> None:
+        if self._source_pixmap is None:
+            return
+        anchor_image = self._point_to_image(anchor)
+        if anchor_image is None:
+            height, width = self._image_shape
+            anchor_image = (width / 2.0, height / 2.0)
+            anchor = QPoint(self.width() // 2, self.height() // 2)
+        new_zoom = float(np.clip(self._zoom * factor, self._min_zoom, self._max_zoom))
+        scale = self._display_scale(new_zoom)
+        if scale <= 0:
+            return
+        anchor_x, anchor_y = anchor_image
+        center_x = (self.width() / 2.0 - (anchor.x() - anchor_x * scale)) / scale
+        center_y = (self.height() / 2.0 - (anchor.y() - anchor_y * scale)) / scale
+        self.set_view(new_zoom, center_x, center_y, emit=True)
+
+    def pan_by_screen_delta(self, dx: float, dy: float, emit: bool = True) -> None:
+        scale = self._display_scale()
+        if scale <= 0 or self._zoom <= 1.0:
+            return
+        self.set_view(
+            self._zoom,
+            self._center_x - float(dx) / scale,
+            self._center_y - float(dy) / scale,
+            emit=emit,
+        )
+
+    def _should_start_pan(self, event) -> bool:
+        if event.button() == Qt.MouseButton.MiddleButton:
+            return True
+        if self._pan_enabled and event.button() == Qt.MouseButton.LeftButton:
+            return True
+        return False
+
+    def _point_to_image(self, point: QPoint) -> tuple[float, float] | None:
+        if self._pixmap_rect.width() <= 0 or self._pixmap_rect.height() <= 0:
+            return None
+        if not self._pixmap_rect.contains(point):
+            return None
+        x = (point.x() - self._pixmap_rect.left()) / self._pixmap_rect.width() * self._image_shape[1]
+        y = (point.y() - self._pixmap_rect.top()) / self._pixmap_rect.height() * self._image_shape[0]
+        return float(x), float(y)
+
+    def _display_scale(self, zoom: float | None = None) -> float:
+        height, width = self._image_shape
+        if height <= 0 or width <= 0 or self.width() <= 0 or self.height() <= 0:
+            return 0.0
+        fit = min(self.width() / width, self.height() / height)
+        return fit * (self._zoom if zoom is None else zoom)
+
+    def _clamp_center(self) -> None:
+        height, width = self._image_shape
+        scale = self._display_scale()
+        if scale <= 0:
+            return
+        half_w = self.width() / (2.0 * scale)
+        half_h = self.height() / (2.0 * scale)
+        if half_w * 2.0 >= width:
+            self._center_x = width / 2.0
+        else:
+            self._center_x = float(np.clip(self._center_x, half_w, width - half_w))
+        if half_h * 2.0 >= height:
+            self._center_y = height / 2.0
+        else:
+            self._center_y = float(np.clip(self._center_y, half_h, height - half_h))
+
+    def _render_current_pixmap(self) -> None:
+        if self._source_pixmap is None or self.width() <= 0 or self.height() <= 0:
+            return
+        self._clamp_center()
+        scale = self._display_scale()
+        height, width = self._image_shape
+        display_w = max(1, int(round(width * scale)))
+        display_h = max(1, int(round(height * scale)))
+        left = int(round(self.width() / 2.0 - self._center_x * scale))
+        top = int(round(self.height() / 2.0 - self._center_y * scale))
+        self._pixmap_rect = QRect(left, top, display_w, display_h)
+
+        canvas = QPixmap(self.size())
+        canvas.fill(QColor(0, 0, 0))
+        painter = QPainter(canvas)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        painter.drawPixmap(self._pixmap_rect, self._source_pixmap)
+        painter.end()
+        self.setPixmap(canvas)
 
 
 class TraceCanvas(FigureCanvas):
@@ -457,10 +663,13 @@ class CurationWindow(QMainWindow):
         self.frame_index = 0
         self.selected_roi: int | None = None
         self.selected_manual_roi: int | None = None
+        self.selected_removed_roi: int | None = None
+        self.selection_box_start: tuple[float, float] | None = None
+        self.selection_box_current: tuple[float, float] | None = None
         self.show_suite2p_refs = False
         self.selected_suite2p_refs: set[int] = set()
-        self.deleted_existing: set[int] = set()
         self.added_rois: list[dict] = []
+        self.removed_rois: list[dict] = []
         self.current_polygon: list[tuple[float, float]] = []
         self.ellipse_start: tuple[float, float] | None = None
         self.ellipse_current: tuple[float, float] | None = None
@@ -470,6 +679,11 @@ class CurationWindow(QMainWindow):
         self.low_pct = 1.0
         self.high_pct = 99.0
         self.playing = False
+        self.image_order_swapped = False
+        self._base_pixmap_cache: dict[tuple[int, float, float], QPixmap] = {}
+        self._overlay_pixmap_cache: dict[tuple, QPixmap] = {}
+        self._roi_overlay_revision = 0
+        self._manual_traces_dirty = False
 
         self.setWindowTitle(f"ROI curation - {paths.trial_id}")
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -480,6 +694,8 @@ class CurationWindow(QMainWindow):
         self.right_canvas.clicked.connect(self.handle_right_click)
         self.right_canvas.dragged.connect(self.handle_right_drag)
         self.right_canvas.released.connect(self.handle_right_release)
+        self.left_canvas.view_changed.connect(self.sync_canvas_view_from_left)
+        self.right_canvas.view_changed.connect(self.sync_canvas_view_from_right)
 
         self.frame_slider = QSlider(Qt.Orientation.Horizontal)
         self.frame_slider.setMinimum(0)
@@ -526,8 +742,40 @@ class CurationWindow(QMainWindow):
         reset_display_btn = QPushButton("Reset display")
         reset_display_btn.clicked.connect(self.reset_display_contrast)
 
-        self.roi_list = QListWidget()
-        self.roi_list.currentRowChanged.connect(self.select_roi_from_list)
+        self.view_mode_combo = QComboBox()
+        self.view_mode_combo.addItem("both images", "both")
+        self.view_mode_combo.addItem("reference only", "reference")
+        self.view_mode_combo.addItem("edit only", "edit")
+        self.view_mode_combo.currentIndexChanged.connect(self.update_image_layout)
+
+        self.swap_images_btn = QPushButton("Swap images")
+        self.swap_images_btn.clicked.connect(self.swap_image_order)
+
+        reset_zoom_btn = QPushButton("Reset zoom")
+        reset_zoom_btn.clicked.connect(self.reset_canvas_zoom)
+
+        self.pan_tool_check = QCheckBox("drag to pan")
+        self.pan_tool_check.stateChanged.connect(self.toggle_pan_tool)
+
+        self.roi_table = QTableWidget(0, 4)
+        self.roi_table.setHorizontalHeaderLabels(["source", "id", "type", "state"])
+        self.roi_table.setMinimumHeight(150)
+        self.roi_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.roi_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.roi_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.roi_table.verticalHeader().setVisible(False)
+        self.roi_table.horizontalHeader().setStretchLastSection(True)
+        self.roi_table.currentCellChanged.connect(self.select_roi_from_table)
+
+        self.removed_roi_table = QTableWidget(0, 3)
+        self.removed_roi_table.setHorizontalHeaderLabels(["source", "id", "type"])
+        self.removed_roi_table.setMaximumHeight(120)
+        self.removed_roi_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.removed_roi_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.removed_roi_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.removed_roi_table.verticalHeader().setVisible(False)
+        self.removed_roi_table.horizontalHeader().setStretchLastSection(True)
+        self.removed_roi_table.currentCellChanged.connect(self.select_removed_roi_from_table)
 
         self.movie_kind_combo = QComboBox()
         self.movie_kind_combo.addItem("raw (01 converted TIFF)", "raw")
@@ -546,9 +794,9 @@ class CurationWindow(QMainWindow):
             if trial_id == paths.trial_id:
                 self.trial_list.setCurrentItem(item)
 
-        self.show_rejected = QCheckBox("show rejected")
-        self.show_rejected.setChecked(False)
-        self.show_rejected.stateChanged.connect(lambda _: self.rebuild_and_refresh())
+        self.show_suite2p_iscell0 = QCheckBox("show current suite2p iscell=0 refs")
+        self.show_suite2p_iscell0.setChecked(False)
+        self.show_suite2p_iscell0.stateChanged.connect(lambda _: self.rebuild_and_refresh())
 
         self.show_suite2p = QCheckBox("show suite2p refs")
         self.show_suite2p.setChecked(False)
@@ -564,10 +812,12 @@ class CurationWindow(QMainWindow):
 
         keep_btn = QPushButton("Keep selected")
         keep_btn.clicked.connect(lambda: self.set_selected_state(1))
-        reject_btn = QPushButton("Reject selected")
-        reject_btn.clicked.connect(lambda: self.set_selected_state(0))
+        remove_btn = QPushButton("Remove selected")
+        remove_btn.clicked.connect(lambda: self.set_selected_state(0))
         delete_btn = QPushButton("Delete selected")
         delete_btn.clicked.connect(self.delete_selected)
+        restore_removed_btn = QPushButton("Restore removed")
+        restore_removed_btn.clicked.connect(self.restore_removed_roi)
         clear_suite2p_btn = QPushButton("Clear suite2p picks")
         clear_suite2p_btn.clicked.connect(self.clear_suite2p_picks)
         load_trial_btn = QPushButton("Load selected")
@@ -584,6 +834,10 @@ class CurationWindow(QMainWindow):
         clear_btn.clicked.connect(self.clear_polygon)
         save_btn = QPushButton("Save manual curation")
         save_btn.clicked.connect(lambda: self.save_outputs())
+        save_close_btn = QPushButton("Save and close")
+        save_close_btn.clicked.connect(self.save_and_close)
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.request_close)
 
         self.trace_canvas = TraceCanvas()
 
@@ -606,15 +860,25 @@ class CurationWindow(QMainWindow):
         display_row.addWidget(self.white_spin)
         controls.addLayout(display_row)
         controls.addWidget(reset_display_btn)
+        controls.addWidget(QLabel("View"))
+        view_row = QHBoxLayout()
+        view_row.addWidget(self.view_mode_combo)
+        view_row.addWidget(self.swap_images_btn)
+        controls.addLayout(view_row)
+        controls.addWidget(self.pan_tool_check)
+        controls.addWidget(reset_zoom_btn)
         controls.addSpacing(10)
-        controls.addWidget(QLabel("ROI list"))
-        controls.addWidget(self.roi_list)
-        controls.addWidget(self.show_rejected)
+        controls.addWidget(QLabel("ROI table"))
+        controls.addWidget(self.roi_table)
+        controls.addWidget(self.show_suite2p_iscell0)
         controls.addWidget(self.show_suite2p)
         controls.addWidget(self.show_final_rois)
         controls.addWidget(keep_btn)
-        controls.addWidget(reject_btn)
+        controls.addWidget(remove_btn)
         controls.addWidget(delete_btn)
+        controls.addWidget(QLabel("Removed this session"))
+        controls.addWidget(self.removed_roi_table)
+        controls.addWidget(restore_removed_btn)
         controls.addWidget(clear_suite2p_btn)
         controls.addWidget(undo_action_btn)
         controls.addSpacing(10)
@@ -628,6 +892,10 @@ class CurationWindow(QMainWindow):
         controls.addWidget(self.trace_canvas)
         controls.addSpacing(10)
         controls.addWidget(save_btn)
+        close_row = QHBoxLayout()
+        close_row.addWidget(save_close_btn)
+        close_row.addWidget(close_btn)
+        controls.addLayout(close_row)
 
         controls_widget = QWidget()
         controls_widget.setLayout(controls)
@@ -636,9 +904,9 @@ class CurationWindow(QMainWindow):
         controls_scroll.setWidget(controls_widget)
         controls_scroll.setMinimumWidth(360)
 
-        image_layout = QHBoxLayout()
-        image_layout.addWidget(self.left_canvas, stretch=1)
-        image_layout.addWidget(self.right_canvas, stretch=1)
+        self.image_layout = QHBoxLayout()
+        self.image_layout.addWidget(self.left_canvas, stretch=1)
+        self.image_layout.addWidget(self.right_canvas, stretch=1)
 
         slider_layout = QHBoxLayout()
         slider_layout.addWidget(QLabel("frame"))
@@ -649,7 +917,7 @@ class CurationWindow(QMainWindow):
 
         main_layout = QHBoxLayout()
         left_layout = QVBoxLayout()
-        left_layout.addLayout(image_layout)
+        left_layout.addLayout(self.image_layout)
         left_layout.addLayout(slider_layout)
         main_layout.addLayout(left_layout, stretch=1)
         main_layout.addWidget(controls_scroll)
@@ -660,8 +928,75 @@ class CurationWindow(QMainWindow):
 
         self.load_saved_curation_if_present()
         self.populate_roi_list()
+        self.update_image_layout()
         self.refresh()
         self.update_trace_plot()
+
+    def sync_canvas_view_from_left(self, zoom: float, center_x: float, center_y: float) -> None:
+        self.right_canvas.sync_view(zoom, center_x, center_y)
+
+    def sync_canvas_view_from_right(self, zoom: float, center_x: float, center_y: float) -> None:
+        self.left_canvas.sync_view(zoom, center_x, center_y)
+
+    def invalidate_frame_cache(self) -> None:
+        self._base_pixmap_cache.clear()
+
+    def invalidate_overlay_cache(self) -> None:
+        self._overlay_pixmap_cache.clear()
+        self._roi_overlay_revision += 1
+
+    def invalidate_all_image_caches(self) -> None:
+        self.invalidate_frame_cache()
+        self.invalidate_overlay_cache()
+
+    def mark_manual_traces_dirty(self) -> None:
+        self._manual_traces_dirty = True
+
+    def ensure_manual_traces_current(self) -> None:
+        if self._manual_traces_dirty:
+            self.recompute_manual_roi_traces()
+
+    def reset_canvas_zoom(self) -> None:
+        self.left_canvas.reset_view(emit=False)
+        self.right_canvas.reset_view(emit=False)
+        self.status.showMessage("Zoom reset")
+
+    def toggle_pan_tool(self) -> None:
+        enabled = self.pan_tool_check.isChecked()
+        self.left_canvas.set_pan_enabled(enabled)
+        self.right_canvas.set_pan_enabled(enabled)
+        if enabled:
+            self.selection_box_start = None
+            self.selection_box_current = None
+            self.freehand_drawing = False
+            self.ellipse_start = None
+            self.ellipse_current = None
+            self.status.showMessage("Drag to pan is on")
+        else:
+            self.status.showMessage("Drag to pan is off")
+        self.refresh()
+
+    def swap_image_order(self) -> None:
+        self.image_order_swapped = not self.image_order_swapped
+        self.update_image_layout()
+
+    def update_image_layout(self, *_args) -> None:
+        while self.image_layout.count():
+            self.image_layout.takeAt(0)
+
+        canvases = [self.left_canvas, self.right_canvas]
+        if self.image_order_swapped:
+            canvases = [self.right_canvas, self.left_canvas]
+        for canvas in canvases:
+            self.image_layout.addWidget(canvas, stretch=1)
+
+        mode = self.view_mode_combo.currentData() if hasattr(self, "view_mode_combo") else "both"
+        self.left_canvas.setVisible(mode in {"both", "reference"})
+        self.right_canvas.setVisible(mode in {"both", "edit"})
+
+        self.swap_images_btn.setText("Unswap images" if self.image_order_swapped else "Swap images")
+        self.left_canvas._render_current_pixmap()
+        self.right_canvas._render_current_pixmap()
 
     def build_roi_cache(self) -> list[dict]:
         cache: list[dict] = []
@@ -693,26 +1028,129 @@ class CurationWindow(QMainWindow):
 
     def populate_roi_list(self) -> None:
         current = self.selected_roi
-        self.roi_list.blockSignals(True)
-        self.roi_list.clear()
+        self.roi_table.blockSignals(True)
+        self.roi_table.setRowCount(0)
         for idx in sorted(self.selected_suite2p_refs):
-            item = QListWidgetItem(f"suite2p {idx:04d} | selected")
-            item.setData(Qt.ItemDataRole.UserRole, ("suite2p", idx))
-            self.roi_list.addItem(item)
+            row = self.add_roi_table_row("suite2p", idx, "suite2p", "final", ("suite2p", idx))
             if current == idx:
-                self.roi_list.setCurrentItem(item)
+                self.roi_table.selectRow(row)
         for idx, roi in enumerate(self.added_rois):
-            status = roi.get("status", "accepted")
-            if status == "rejected" and not self.show_rejected.isChecked():
-                continue
-            item = QListWidgetItem(f"manual {roi.get('manual_roi_id', idx + 1):04d} | {roi.get('roi_type', 'manual')} | {status}")
-            item.setData(Qt.ItemDataRole.UserRole, ("manual", idx))
-            self.roi_list.addItem(item)
+            row = self.add_roi_table_row(
+                "manual",
+                roi.get("manual_roi_id", idx + 1),
+                roi.get("roi_type", "manual"),
+                "final",
+                ("manual", idx),
+            )
             if self.selected_manual_roi == idx:
-                self.roi_list.setCurrentItem(item)
-        self.roi_list.blockSignals(False)
+                self.roi_table.selectRow(row)
+        self.roi_table.resizeColumnsToContents()
+        self.roi_table.blockSignals(False)
+        self.populate_removed_roi_table()
+
+    def add_roi_table_row(self, source: str, roi_id: object, roi_type: str, state: str, data: tuple[str, int]) -> int:
+        row = self.roi_table.rowCount()
+        self.roi_table.insertRow(row)
+        values = [str(source), str(roi_id), str(roi_type), str(state)]
+        for col, value in enumerate(values):
+            item = QTableWidgetItem(value)
+            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter if col in {1, 3} else Qt.AlignmentFlag.AlignLeft)
+            if col == 0:
+                item.setData(Qt.ItemDataRole.UserRole, data)
+            self.roi_table.setItem(row, col, item)
+        return row
+
+    def selected_final_entries(self) -> list[tuple[str, int]]:
+        entries: list[tuple[str, int]] = []
+        for index in self.roi_table.selectionModel().selectedRows():
+            item = self.roi_table.item(index.row(), 0)
+            if item is None:
+                continue
+            kind, idx = item.data(Qt.ItemDataRole.UserRole)
+            entries.append((str(kind), int(idx)))
+        if entries:
+            return entries
+        if self.selected_manual_roi is not None:
+            return [("manual", int(self.selected_manual_roi))]
+        if self.selected_roi is not None and self.selected_roi in self.selected_suite2p_refs:
+            return [("suite2p", int(self.selected_roi))]
+        return []
+
+    def selected_final_sets(self) -> tuple[set[int], set[int]]:
+        suite2p: set[int] = set()
+        manual: set[int] = set()
+        for kind, idx in self.selected_final_entries():
+            if kind == "suite2p":
+                suite2p.add(idx)
+            elif kind == "manual":
+                manual.add(idx)
+        return suite2p, manual
+
+    def select_final_entries(self, entries: list[tuple[str, int]]) -> None:
+        wanted = set(entries)
+        self.roi_table.blockSignals(True)
+        self.roi_table.clearSelection()
+        last_entry: tuple[str, int] | None = None
+        for row in range(self.roi_table.rowCount()):
+            item = self.roi_table.item(row, 0)
+            if item is None:
+                continue
+            kind, idx = item.data(Qt.ItemDataRole.UserRole)
+            entry = (str(kind), int(idx))
+            if entry in wanted:
+                self.roi_table.selectionModel().select(
+                    self.roi_table.model().index(row, 0),
+                    QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows,
+                )
+                last_entry = entry
+        self.roi_table.blockSignals(False)
+        if last_entry is not None:
+            kind, idx = last_entry
+            if kind == "suite2p":
+                self.selected_roi = idx
+                self.selected_manual_roi = None
+            else:
+                self.selected_roi = None
+                self.selected_manual_roi = idx
+        else:
+            self.selected_roi = None
+            self.selected_manual_roi = None
+
+    def selected_removed_indices(self) -> list[int]:
+        indices: list[int] = []
+        for index in self.removed_roi_table.selectionModel().selectedRows():
+            item = self.removed_roi_table.item(index.row(), 0)
+            if item is None:
+                continue
+            indices.append(int(item.data(Qt.ItemDataRole.UserRole)))
+        if indices:
+            return sorted(set(indices))
+        if self.selected_removed_roi is not None:
+            return [int(self.selected_removed_roi)]
+        return []
+
+    def populate_removed_roi_table(self) -> None:
+        self.removed_roi_table.blockSignals(True)
+        self.removed_roi_table.setRowCount(0)
+        for idx, entry in enumerate(self.removed_rois):
+            row = self.removed_roi_table.rowCount()
+            self.removed_roi_table.insertRow(row)
+            source = str(entry.get("source", ""))
+            roi_id = str(entry.get("id", ""))
+            roi_type = str(entry.get("type", source))
+            for col, value in enumerate([source, roi_id, roi_type]):
+                item = QTableWidgetItem(value)
+                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter if col == 1 else Qt.AlignmentFlag.AlignLeft)
+                if col == 0:
+                    item.setData(Qt.ItemDataRole.UserRole, idx)
+                self.removed_roi_table.setItem(row, col, item)
+            if self.selected_removed_roi == idx:
+                self.removed_roi_table.selectRow(row)
+        self.removed_roi_table.resizeColumnsToContents()
+        self.removed_roi_table.blockSignals(False)
 
     def rebuild_and_refresh(self) -> None:
+        self.invalidate_overlay_cache()
         self.populate_roi_list()
         self.refresh()
 
@@ -720,6 +1158,7 @@ class CurationWindow(QMainWindow):
         self.show_suite2p_refs = self.show_suite2p.isChecked()
         if self.show_suite2p_refs and not self.suite2p_loaded:
             self.load_suite2p_refs()
+        self.invalidate_overlay_cache()
         self.refresh()
 
     def refresh_trial_list(self, selected_trial_id: str | None = None) -> None:
@@ -800,6 +1239,7 @@ class CurationWindow(QMainWindow):
         self.ellipse_start = None
         self.ellipse_current = None
         self.freehand_drawing = False
+        self.invalidate_all_image_caches()
         self.recompute_manual_roi_traces()
         self.refresh_trial_list(selected_trial_id=self.paths.trial_id)
         self.refresh()
@@ -810,18 +1250,21 @@ class CurationWindow(QMainWindow):
 
     def recompute_manual_roi_traces(self) -> None:
         refreshed: list[dict] = []
-        for saved in self.added_rois:
+        saved_rois = self.added_rois
+        for idx, saved in enumerate(saved_rois):
             points = [(float(x), float(y)) for x, y in saved.get("points", [])]
             if len(points) < 3:
                 continue
             mask = polygon_mask(points, self.movie.shape[-2:])
             if int(mask.sum()) < 3:
                 continue
-            roi = self.build_manual_roi(mask)
+            self.added_rois = saved_rois
+            roi = self.build_manual_roi(mask, exclude_manual_idx=idx)
             roi.update({k: v for k, v in saved.items() if not k.startswith("_trace_")})
             roi["points"] = points
             refreshed.append(roi)
         self.added_rois = refreshed
+        self._manual_traces_dirty = False
 
     def default_trace_movie_path(self, paths: TrialPaths) -> Path:
         for kind in ("corrected", "raw"):
@@ -864,25 +1307,34 @@ class CurationWindow(QMainWindow):
 
         saved_roi_set = self.load_saved_roi_set(roi_set_path)
         saved_suite2p_points = self.saved_suite2p_points_by_id(saved_roi_set)
+        saved_suite2p_ids = set(saved_suite2p_points)
         selected_refs = read_index_csv(selected_path)
         deleted_refs = read_index_csv(deleted_path)
+        suite2p_refs_to_restore = set(selected_refs) if selected_refs else saved_suite2p_ids
         valid_selected: set[int] = set()
-        invalid_selected: set[int] = set()
-        if selected_refs or deleted_refs:
+        stale_saved_suite2p_refs: set[int] = set()
+        if suite2p_refs_to_restore or deleted_refs:
             if not self.suite2p_loaded:
                 self.load_suite2p_refs()
-            for idx in selected_refs:
-                if 0 <= idx < len(self.iscell):
-                    saved_points = saved_suite2p_points.get(idx)
-                    if saved_points is None or self.saved_suite2p_shape_matches_current(idx, saved_points):
+            for idx in suite2p_refs_to_restore:
+                saved_points = saved_suite2p_points.get(idx)
+                if saved_points is None:
+                    if 0 <= idx < len(self.iscell):
                         valid_selected.add(idx)
                     else:
-                        invalid_selected.add(idx)
+                        stale_saved_suite2p_refs.add(idx)
+                    continue
+                if 0 <= idx < len(self.iscell):
+                    if self.saved_suite2p_shape_matches_current(idx, saved_points):
+                        valid_selected.add(idx)
+                    else:
+                        stale_saved_suite2p_refs.add(idx)
                 else:
-                    invalid_selected.add(idx)
-            valid_deleted = {idx for idx in deleted_refs if idx >= 0}
+                    stale_saved_suite2p_refs.add(idx)
+            if stale_saved_suite2p_refs:
+                stale_saved_suite2p_refs |= valid_selected
+                valid_selected = set()
             self.selected_suite2p_refs = valid_selected
-            self.deleted_existing = valid_deleted
             for idx in valid_selected:
                 self.iscell[idx, 0] = 1.0
                 self.iscell[idx, 1] = 1.0
@@ -891,7 +1343,8 @@ class CurationWindow(QMainWindow):
                 self.show_suite2p.blockSignals(True)
                 self.show_suite2p.setChecked(True)
                 self.show_suite2p.blockSignals(False)
-            loaded_parts.append(f"{len(valid_selected)} suite2p pick(s)")
+            if valid_selected:
+                loaded_parts.append(f"{len(valid_selected)} current suite2p pick(s)")
 
         if additions_path.exists():
             try:
@@ -910,13 +1363,17 @@ class CurationWindow(QMainWindow):
                     continue
                 roi = self.build_manual_roi(mask)
                 roi.update({k: v for k, v in saved.items() if not k.startswith("_trace_")})
+                roi["status"] = "accepted"
                 roi["points"] = points
-                self.added_rois.append(roi)
+                if saved.get("status", "accepted") != "rejected":
+                    self.added_rois.append(roi)
+            self.recompute_manual_roi_traces()
             loaded_parts.append(f"{len(self.added_rois)} manual ROI(s)")
 
-        imported = self.import_saved_suite2p_picks_as_manual(saved_roi_set, valid_selected | invalid_selected)
+        imported = self.import_saved_suite2p_picks_as_manual(saved_roi_set, stale_saved_suite2p_refs)
         if imported:
-            loaded_parts.append(f"{imported} imported old suite2p ROI(s)")
+            loaded_parts.append(f"{imported} stale suite2p ROI(s) converted to manual")
+            self.recompute_manual_roi_traces()
 
         if loaded_parts:
             self.dirty = False
@@ -964,7 +1421,20 @@ class CurationWindow(QMainWindow):
         union = int(np.logical_or(current_mask, saved_mask).sum())
         if union == 0:
             return False
-        return (intersection / union) >= 0.5
+        current_area = int(current_mask.sum())
+        saved_area = int(saved_mask.sum())
+        if current_area == 0 or saved_area == 0:
+            return False
+        area_ratio = current_area / saved_area
+        current_y, current_x = np.nonzero(current_mask)
+        saved_y, saved_x = np.nonzero(saved_mask)
+        centroid_dist = float(
+            np.hypot(
+                float(np.mean(current_x) - np.mean(saved_x)),
+                float(np.mean(current_y) - np.mean(saved_y)),
+            )
+        )
+        return (intersection / union) >= 0.75 and 0.7 <= area_ratio <= 1.4 and centroid_dist <= 5.0
 
     def import_saved_suite2p_picks_as_manual(self, saved_roi_set: list[dict], selected_refs: set[int]) -> int:
         if not saved_roi_set:
@@ -1013,13 +1483,17 @@ class CurationWindow(QMainWindow):
         existing = [int(roi.get("manual_roi_id", 0)) for roi in self.added_rois]
         return max(existing, default=0) + 1
 
-    def maybe_save_before_switch(self) -> bool:
+    def maybe_save_before_switch(self, reason: str = "switching") -> bool:
         if not self.dirty:
             return True
+        if reason == "closing":
+            message = "Current ROI edits are not saved. Save before closing?"
+        else:
+            message = "Current ROI edits are not saved. Save before switching?"
         response = QMessageBox.question(
             self,
             "Unsaved ROI edits",
-            "Current ROI edits are not saved. Save before switching?",
+            message,
             QMessageBox.StandardButton.Save
             | QMessageBox.StandardButton.Discard
             | QMessageBox.StandardButton.Cancel,
@@ -1030,6 +1504,13 @@ class CurationWindow(QMainWindow):
         if response == QMessageBox.StandardButton.Save:
             self.save_outputs(show_message=False)
         return True
+
+    def save_and_close(self) -> None:
+        self.save_outputs(show_message=False)
+        self.close()
+
+    def request_close(self) -> None:
+        self.close()
 
     def load_selected_trial(self) -> None:
         item = self.trial_list.currentItem()
@@ -1087,8 +1568,9 @@ class CurationWindow(QMainWindow):
         self.show_suite2p.setChecked(False)
         self.show_suite2p.blockSignals(False)
         self.selected_suite2p_refs = set()
-        self.deleted_existing = set()
         self.added_rois = []
+        self.removed_rois = []
+        self.selected_removed_roi = None
         self.current_polygon = []
         self.ellipse_start = None
         self.ellipse_current = None
@@ -1120,6 +1602,7 @@ class CurationWindow(QMainWindow):
             self.white_spin.blockSignals(False)
         self.low_pct = low
         self.high_pct = high
+        self.invalidate_frame_cache()
         self.refresh()
 
     def reset_display_contrast(self) -> None:
@@ -1131,6 +1614,7 @@ class CurationWindow(QMainWindow):
         self.white_spin.blockSignals(False)
         self.low_pct = 1.0
         self.high_pct = 99.0
+        self.invalidate_frame_cache()
         self.refresh()
 
     def toggle_playback(self) -> None:
@@ -1175,10 +1659,12 @@ class CurationWindow(QMainWindow):
         self.frame_spin.blockSignals(False)
         self.refresh()
 
-    def select_roi_from_list(self, row: int) -> None:
-        item = self.roi_list.item(row)
+    def select_roi_from_table(self, row: int, _column: int, _previous_row: int, _previous_column: int) -> None:
+        item = self.roi_table.item(row, 0)
         if item is None:
             return
+        self.selected_removed_roi = None
+        self.removed_roi_table.clearSelection()
         kind, idx = item.data(Qt.ItemDataRole.UserRole)
         if kind == "suite2p":
             self.selected_roi = int(idx)
@@ -1189,14 +1675,26 @@ class CurationWindow(QMainWindow):
         self.refresh()
         self.update_trace_plot()
 
+    def select_removed_roi_from_table(self, row: int, _column: int, _previous_row: int, _previous_column: int) -> None:
+        item = self.removed_roi_table.item(row, 0)
+        if item is None:
+            return
+        idx = item.data(Qt.ItemDataRole.UserRole)
+        self.selected_removed_roi = int(idx)
+        self.selected_roi = None
+        self.selected_manual_roi = None
+        self.roi_table.clearSelection()
+        self.status.showMessage("Selected removed ROI; Restore removed will put it back in the final ROI table")
+
     def handle_overlay_click(self, x: float, y: float, button: int) -> None:
         manual_idx = self.manual_roi_at(x, y)
         if manual_idx is not None:
             self.selected_roi = None
             self.selected_manual_roi = manual_idx
             if button == Qt.MouseButton.RightButton:
-                self.set_selected_state(0)
-                self.status.showMessage(f"Rejected manual ROI {self.added_rois[manual_idx].get('manual_roi_id')}")
+                manual_id = self.added_rois[manual_idx].get("manual_roi_id")
+                self.delete_manual_roi_at(manual_idx)
+                self.status.showMessage(f"Removed manual ROI {manual_id} from final ROI set")
             else:
                 self.status.showMessage(f"Selected manual ROI {self.added_rois[manual_idx]['manual_roi_id']}")
                 self.refresh()
@@ -1234,9 +1732,7 @@ class CurationWindow(QMainWindow):
         best_idx = None
         best_dist = float("inf")
         for idx, roi in enumerate(self.roi_cache):
-            if idx in self.deleted_existing:
-                continue
-            if idx < len(self.suite2p_ref_flags) and not self.suite2p_ref_flags[idx] and not self.show_rejected.isChecked():
+            if idx < len(self.suite2p_ref_flags) and not self.suite2p_ref_flags[idx] and not self.show_suite2p_iscell0.isChecked():
                 continue
             ypix = np.asarray(roi.get("ypix", []), dtype=float)
             xpix = np.asarray(roi.get("xpix", []), dtype=float)
@@ -1252,7 +1748,7 @@ class CurationWindow(QMainWindow):
         best_idx = None
         best_dist = float("inf")
         for idx in sorted(self.selected_suite2p_refs):
-            if idx in self.deleted_existing or idx >= len(self.roi_cache):
+            if idx >= len(self.roi_cache):
                 continue
             roi = self.roi_cache[idx]
             ypix = np.asarray(roi.get("ypix", []), dtype=float)
@@ -1268,16 +1764,54 @@ class CurationWindow(QMainWindow):
     def manual_roi_at(self, x: float, y: float) -> int | None:
         for idx in range(len(self.added_rois) - 1, -1, -1):
             roi = self.added_rois[idx]
-            if roi.get("status", "accepted") == "rejected" and not self.show_rejected.isChecked():
-                continue
             points = roi.get("points", [])
             if len(points) >= 3 and MplPath(points).contains_point((x, y)):
                 return idx
         return None
 
+    def final_roi_entries_in_box(
+        self,
+        start: tuple[float, float],
+        end: tuple[float, float],
+    ) -> list[tuple[str, int]]:
+        x0, y0 = start
+        x1, y1 = end
+        xmin, xmax = sorted((float(x0), float(x1)))
+        ymin, ymax = sorted((float(y0), float(y1)))
+        entries: list[tuple[str, int]] = []
+        for idx in sorted(self.selected_suite2p_refs):
+            if idx >= len(self.roi_cache):
+                continue
+            roi = self.roi_cache[idx]
+            xpix = np.asarray(roi.get("xpix", []), dtype=float)
+            ypix = np.asarray(roi.get("ypix", []), dtype=float)
+            if xpix.size == 0:
+                continue
+            cx = float(np.mean(xpix))
+            cy = float(np.mean(ypix))
+            if xmin <= cx <= xmax and ymin <= cy <= ymax:
+                entries.append(("suite2p", idx))
+        for idx, roi in enumerate(self.added_rois):
+            cx = float(roi.get("x_mean", 0.0))
+            cy = float(roi.get("y_mean", 0.0))
+            if xmin <= cx <= xmax and ymin <= cy <= ymax:
+                entries.append(("manual", idx))
+        return entries
+
     def handle_right_click(self, x: float, y: float, button: int) -> None:
         mode = self.mode_combo.currentText()
         final_rois_visible = self.show_final_rois.isChecked()
+        if (
+            mode == "select ROI"
+            and button == Qt.MouseButton.LeftButton
+            and final_rois_visible
+            and QApplication.keyboardModifiers() & Qt.KeyboardModifier.ShiftModifier
+        ):
+            self.selection_box_start = (float(x), float(y))
+            self.selection_box_current = (float(x), float(y))
+            self.status.showMessage("Drag to box-select final ROIs")
+            self.refresh()
+            return
         if button == Qt.MouseButton.RightButton and final_rois_visible:
             manual_idx = self.manual_roi_at(x, y)
             if manual_idx is not None:
@@ -1317,7 +1851,7 @@ class CurationWindow(QMainWindow):
                 if button == Qt.MouseButton.RightButton:
                     manual_id = self.added_rois[manual_idx].get("manual_roi_id")
                     self.delete_manual_roi_at(manual_idx)
-                    self.status.showMessage(f"Deleted manual ROI {manual_id}")
+                    self.status.showMessage(f"Removed manual ROI {manual_id} from final ROI set")
                 else:
                     self.selected_roi = None
                     self.selected_manual_roi = manual_idx
@@ -1338,6 +1872,10 @@ class CurationWindow(QMainWindow):
 
     def handle_right_drag(self, x: float, y: float, buttons: object) -> None:
         mode = self.mode_combo.currentText()
+        if mode == "select ROI" and self.selection_box_start is not None and (buttons & Qt.MouseButton.LeftButton):
+            self.selection_box_current = (float(x), float(y))
+            self.refresh()
+            return
         if mode == "draw ellipse ROI" and self.ellipse_start is not None and (buttons & Qt.MouseButton.LeftButton):
             self.ellipse_current = (float(x), float(y))
             self.current_polygon = ellipse_points(self.ellipse_start, self.ellipse_current)
@@ -1357,6 +1895,16 @@ class CurationWindow(QMainWindow):
 
     def handle_right_release(self, x: float, y: float, button: object) -> None:
         mode = self.mode_combo.currentText()
+        if mode == "select ROI" and button == Qt.MouseButton.LeftButton and self.selection_box_start is not None:
+            self.selection_box_current = (float(x), float(y))
+            entries = self.final_roi_entries_in_box(self.selection_box_start, self.selection_box_current)
+            self.selection_box_start = None
+            self.selection_box_current = None
+            self.select_final_entries(entries)
+            self.status.showMessage(f"Selected {len(entries)} final ROI(s)")
+            self.refresh()
+            self.update_trace_plot()
+            return
         if mode == "draw ellipse ROI" and button == Qt.MouseButton.LeftButton and self.ellipse_start is not None:
             self.ellipse_current = (float(x), float(y))
             self.current_polygon = ellipse_points(self.ellipse_start, self.ellipse_current)
@@ -1406,16 +1954,46 @@ class CurationWindow(QMainWindow):
         self.selected_roi = None
         self.selected_manual_roi = len(self.added_rois) - 1
         self.current_polygon = []
+        self.mark_manual_traces_dirty()
+        self.invalidate_overlay_cache()
         self.dirty = True
         self.status.showMessage(f"Added {roi['roi_type']} ROI {roi['manual_roi_id']} with {roi['n_pixels']} pixels")
+        self.populate_roi_list()
         self.refresh()
         self.update_trace_plot()
 
-    def build_manual_roi(self, mask: np.ndarray) -> dict:
+    def final_roi_exclusion_mask(
+        self,
+        shape: tuple[int, int],
+        exclude_manual_idx: int | None = None,
+        exclude_suite2p_idx: int | None = None,
+    ) -> np.ndarray:
+        exclusion = np.zeros(shape, dtype=bool)
+        for idx in sorted(self.selected_suite2p_refs):
+            if idx == exclude_suite2p_idx or idx >= len(self.roi_cache):
+                continue
+            roi = self.roi_cache[idx]
+            ypix = np.asarray(roi.get("ypix", []), dtype=int)
+            xpix = np.asarray(roi.get("xpix", []), dtype=int)
+            valid = (ypix >= 0) & (ypix < shape[0]) & (xpix >= 0) & (xpix < shape[1])
+            exclusion[ypix[valid], xpix[valid]] = True
+        for idx, roi in enumerate(self.added_rois):
+            if idx == exclude_manual_idx or roi.get("status", "accepted") != "accepted":
+                continue
+            points = [(float(x), float(y)) for x, y in roi.get("points", [])]
+            if len(points) < 3:
+                continue
+            exclusion |= polygon_mask(points, shape)
+        return exclusion
+
+    def build_manual_roi(self, mask: np.ndarray, exclude_manual_idx: int | None = None) -> dict:
         ypix, xpix = np.nonzero(mask)
-        f, fneu, fcorr, dff, f0 = self.traces_for_mask(mask)
+        f, fneu, fcorr, dff, f0, neuropil_pixels = self.traces_for_mask(
+            mask,
+            exclusion_mask=self.final_roi_exclusion_mask(mask.shape, exclude_manual_idx=exclude_manual_idx),
+        )
         return {
-            "manual_roi_id": len(self.added_rois) + 1,
+            "manual_roi_id": self.next_manual_roi_id(),
             "roi_type": "ellipse" if self.mode_combo.currentText() == "draw ellipse ROI" else "freehand",
             "status": "accepted",
             "points": [[float(x), float(y)] for x, y in self.current_polygon],
@@ -1427,6 +2005,8 @@ class CurationWindow(QMainWindow):
             "f0_percentile": float(self.f0_percentile),
             "f0": float(f0),
             "trace_movie_path": str(self.trace_movie_path),
+            "neuropil_exclusion": "other_final_rois",
+            "neuropil_pixels": int(neuropil_pixels),
             "trace_summary": {
                 "mean_F": float(np.nanmean(f)),
                 "mean_Fneu": float(np.nanmean(fneu)),
@@ -1440,8 +2020,12 @@ class CurationWindow(QMainWindow):
             "_trace_dff": dff.astype(float).tolist(),
         }
 
-    def traces_for_mask(self, mask: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, float]:
-        annulus = annulus_mask(mask)
+    def traces_for_mask(
+        self,
+        mask: np.ndarray,
+        exclusion_mask: np.ndarray | None = None,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, float, int]:
+        annulus = annulus_mask(mask, exclusion_mask=exclusion_mask)
         f = self.mean_trace(mask)
         fneu = self.mean_trace(annulus) if np.any(annulus) else np.full_like(f, np.nan)
         if np.all(~np.isfinite(fneu)):
@@ -1449,7 +2033,7 @@ class CurationWindow(QMainWindow):
         else:
             fcorr = f - self.neuropil_coeff * np.nan_to_num(fneu, nan=0.0)
         dff, f0 = robust_dff(fcorr, self.f0_percentile, self.f0_eps)
-        return f, fneu, fcorr, dff, f0
+        return f, fneu, fcorr, dff, f0, int(np.count_nonzero(annulus))
 
     def suite2p_mask(self, roi_idx: int) -> np.ndarray:
         mask = np.zeros(self.trace_movie.shape[-2:], dtype=bool)
@@ -1477,79 +2061,154 @@ class CurationWindow(QMainWindow):
         return np.asarray(np.nanmean(pixels, axis=1), dtype=np.float32)
 
     def set_selected_state(self, state: int) -> None:
-        if self.selected_manual_roi is not None and 0 <= self.selected_manual_roi < len(self.added_rois):
-            self.push_undo("manual-state")
-            self.added_rois[self.selected_manual_roi]["status"] = "accepted" if state else "rejected"
-            self.dirty = True
-            self.refresh()
-            self.update_trace_plot()
+        if not state and len(self.selected_final_entries()) > 1:
+            self.delete_selected()
             return
-        if self.selected_roi is None or self.selected_roi in self.deleted_existing:
+        if self.selected_manual_roi is not None and 0 <= self.selected_manual_roi < len(self.added_rois):
+            if state:
+                self.status.showMessage("Manual ROI is already in the final ROI set")
+            else:
+                self.delete_manual_roi_at(self.selected_manual_roi)
+            return
+        if self.selected_roi is None:
             return
         self.push_undo("suite2p-pick")
+        roi_idx = int(self.selected_roi)
+        was_selected = roi_idx in self.selected_suite2p_refs
         if state:
-            self.selected_suite2p_refs.add(int(self.selected_roi))
-            self.iscell[self.selected_roi, 0] = 1.0
-            self.iscell[self.selected_roi, 1] = 1.0
+            self.selected_suite2p_refs.add(roi_idx)
+            self.removed_rois = [
+                entry
+                for entry in self.removed_rois
+                if not (entry.get("source") == "suite2p" and int(entry.get("id", -1)) == roi_idx)
+            ]
+            self.selected_removed_roi = None
+            self.iscell[roi_idx, 0] = 1.0
+            self.iscell[roi_idx, 1] = 1.0
         else:
-            self.selected_suite2p_refs.discard(int(self.selected_roi))
-            self.iscell[self.selected_roi, 0] = 0.0
-            self.iscell[self.selected_roi, 1] = 0.0
+            self.selected_suite2p_refs.discard(roi_idx)
+            if was_selected:
+                self.removed_rois = [
+                    entry
+                    for entry in self.removed_rois
+                    if not (entry.get("source") == "suite2p" and int(entry.get("id", -1)) == roi_idx)
+                ]
+                self.removed_rois.append({"source": "suite2p", "id": roi_idx, "type": "suite2p"})
+                self.selected_removed_roi = len(self.removed_rois) - 1
+            self.iscell[roi_idx, 0] = 0.0
+            self.iscell[roi_idx, 1] = 0.0
+        self.mark_manual_traces_dirty()
+        self.invalidate_overlay_cache()
         self.dirty = True
         self.populate_roi_list()
         self.refresh()
         self.update_trace_plot()
 
-    def remove_picked_suite2p_roi(self, roi_idx: int) -> bool:
+    def remove_picked_suite2p_roi(self, roi_idx: int, push_undo: bool = True) -> bool:
         if roi_idx not in self.selected_suite2p_refs:
             return False
-        self.push_undo("suite2p-unpick")
+        if push_undo:
+            self.push_undo("suite2p-unpick")
         self.selected_suite2p_refs.discard(int(roi_idx))
+        self.removed_rois = [
+            entry
+            for entry in self.removed_rois
+            if not (entry.get("source") == "suite2p" and int(entry.get("id", -1)) == int(roi_idx))
+        ]
+        self.removed_rois.append({"source": "suite2p", "id": int(roi_idx), "type": "suite2p"})
+        self.selected_removed_roi = len(self.removed_rois) - 1
         if 0 <= roi_idx < len(self.iscell):
             self.iscell[roi_idx, 0] = 0.0
             self.iscell[roi_idx, 1] = 0.0
         if self.selected_roi == roi_idx:
             self.selected_roi = None
+        self.mark_manual_traces_dirty()
+        self.invalidate_overlay_cache()
         self.dirty = True
         self.populate_roi_list()
         self.refresh()
         self.update_trace_plot()
         return True
 
-    def delete_manual_roi_at(self, manual_idx: int) -> None:
+    def delete_manual_roi_at(self, manual_idx: int, push_undo: bool = True) -> None:
         if manual_idx < 0 or manual_idx >= len(self.added_rois):
             return
-        self.push_undo("delete-manual")
+        if push_undo:
+            self.push_undo("delete-manual")
         removed = self.added_rois.pop(manual_idx)
+        self.removed_rois.append(
+            {
+                "source": "manual",
+                "id": int(removed.get("manual_roi_id", len(self.removed_rois) + 1)),
+                "type": str(removed.get("roi_type", "manual")),
+                "roi": copy.deepcopy(removed),
+            }
+        )
+        self.selected_removed_roi = len(self.removed_rois) - 1
         if self.selected_manual_roi == manual_idx:
             self.selected_manual_roi = None
         elif self.selected_manual_roi is not None and self.selected_manual_roi > manual_idx:
             self.selected_manual_roi -= 1
+        self.mark_manual_traces_dirty()
+        self.invalidate_overlay_cache()
         self.dirty = True
-        self.status.showMessage(f"Deleted manual ROI {removed.get('manual_roi_id')}")
+        self.status.showMessage(f"Removed manual ROI {removed.get('manual_roi_id')} from final ROI set")
+        self.populate_roi_list()
+        self.refresh()
+        self.update_trace_plot()
+
+    def restore_removed_roi(self) -> None:
+        indices = self.selected_removed_indices()
+        if not indices:
+            self.status.showMessage("Select a removed ROI to restore")
+            return
+        self.push_undo("restore-removed")
+        self.selected_removed_roi = None
+        restored_count = 0
+        for idx in sorted(indices, reverse=True):
+            if idx < 0 or idx >= len(self.removed_rois):
+                continue
+            restored = self.removed_rois.pop(idx)
+            source = restored.get("source")
+            if source == "suite2p":
+                roi_idx = int(restored["id"])
+                self.selected_suite2p_refs.add(roi_idx)
+                if 0 <= roi_idx < len(self.iscell):
+                    self.iscell[roi_idx, 0] = 1.0
+                    self.iscell[roi_idx, 1] = 1.0
+                self.selected_roi = roi_idx
+                self.selected_manual_roi = None
+                restored_count += 1
+            elif source == "manual" and "roi" in restored:
+                self.added_rois.append(copy.deepcopy(restored["roi"]))
+                self.selected_roi = None
+                self.selected_manual_roi = len(self.added_rois) - 1
+                restored_count += 1
+        self.status.showMessage(f"Restored {restored_count} ROI(s)")
+        self.mark_manual_traces_dirty()
+        self.invalidate_overlay_cache()
+        self.dirty = True
         self.populate_roi_list()
         self.refresh()
         self.update_trace_plot()
 
     def delete_selected(self) -> None:
-        if self.selected_manual_roi is not None and 0 <= self.selected_manual_roi < len(self.added_rois):
-            self.delete_manual_roi_at(self.selected_manual_roi)
+        entries = self.selected_final_entries()
+        if not entries:
             return
-        if self.selected_roi is None:
-            return
-        self.push_undo("delete-existing")
-        deleted = int(self.selected_roi)
-        self.deleted_existing.add(deleted)
-        self.selected_suite2p_refs.discard(deleted)
-        self.iscell[deleted, 0] = 0.0
-        self.iscell[deleted, 1] = 0.0
-        self.selected_roi = None
-        self.selected_manual_roi = None
-        self.dirty = True
-        self.status.showMessage(f"Deleted suite2p ROI {deleted} from manual curation output")
-        self.populate_roi_list()
-        self.refresh()
-        self.update_trace_plot()
+        self.push_undo("remove-selected")
+        removed_count = 0
+        suite2p_indices = [idx for kind, idx in entries if kind == "suite2p"]
+        manual_indices = [idx for kind, idx in entries if kind == "manual"]
+        for roi_idx in suite2p_indices:
+            if self.remove_picked_suite2p_roi(roi_idx, push_undo=False):
+                removed_count += 1
+        for manual_idx in sorted(set(manual_indices), reverse=True):
+            before = len(self.added_rois)
+            self.delete_manual_roi_at(manual_idx, push_undo=False)
+            if len(self.added_rois) < before:
+                removed_count += 1
+        self.status.showMessage(f"Removed {removed_count} ROI(s) from final ROI set")
 
     def clear_suite2p_picks(self) -> None:
         if not self.selected_suite2p_refs:
@@ -1557,10 +2216,19 @@ class CurationWindow(QMainWindow):
             return
         self.push_undo("clear-suite2p-picks")
         for idx in self.selected_suite2p_refs:
+            self.removed_rois = [
+                entry
+                for entry in self.removed_rois
+                if not (entry.get("source") == "suite2p" and int(entry.get("id", -1)) == int(idx))
+            ]
+            self.removed_rois.append({"source": "suite2p", "id": int(idx), "type": "suite2p"})
             self.iscell[idx, 0] = 0.0
             self.iscell[idx, 1] = 0.0
         self.selected_suite2p_refs = set()
+        self.selected_removed_roi = len(self.removed_rois) - 1 if self.removed_rois else None
         self.selected_roi = None
+        self.mark_manual_traces_dirty()
+        self.invalidate_overlay_cache()
         self.dirty = True
         self.populate_roi_list()
         self.refresh()
@@ -1572,8 +2240,8 @@ class CurationWindow(QMainWindow):
                 "label": label,
                 "iscell": self.iscell.copy(),
                 "selected_suite2p_refs": set(self.selected_suite2p_refs),
-                "deleted_existing": set(self.deleted_existing),
                 "added_rois": copy.deepcopy(self.added_rois),
+                "removed_rois": copy.deepcopy(self.removed_rois),
                 "current_polygon": list(self.current_polygon),
                 "ellipse_start": self.ellipse_start,
                 "ellipse_current": self.ellipse_current,
@@ -1591,13 +2259,22 @@ class CurationWindow(QMainWindow):
         state = self.undo_stack.pop()
         self.iscell = state["iscell"]
         self.selected_suite2p_refs = state["selected_suite2p_refs"]
-        self.deleted_existing = state["deleted_existing"]
         self.added_rois = state["added_rois"]
-        self.current_polygon = state["current_polygon"]
-        self.ellipse_start = state["ellipse_start"]
-        self.ellipse_current = state["ellipse_current"]
+        self.removed_rois = state["removed_rois"]
+        self.selected_removed_roi = None
+        if state["label"] == "add-manual":
+            self.current_polygon = []
+            self.ellipse_start = None
+            self.ellipse_current = None
+            self.freehand_drawing = False
+        else:
+            self.current_polygon = state["current_polygon"]
+            self.ellipse_start = state["ellipse_start"]
+            self.ellipse_current = state["ellipse_current"]
         self.selected_roi = state["selected_roi"]
         self.selected_manual_roi = state["selected_manual_roi"]
+        self.recompute_manual_roi_traces()
+        self.invalidate_overlay_cache()
         self.dirty = True
         self.status.showMessage(f"Undid {state['label']}")
         self.populate_roi_list()
@@ -1606,6 +2283,10 @@ class CurationWindow(QMainWindow):
 
     def update_trace_plot(self) -> None:
         if self.selected_manual_roi is not None and 0 <= self.selected_manual_roi < len(self.added_rois):
+            self.ensure_manual_traces_current()
+            if self.selected_manual_roi is None or self.selected_manual_roi >= len(self.added_rois):
+                self.trace_canvas.plot_empty("Select a ROI or draw a freehand/ellipse ROI")
+                return
             roi = self.added_rois[self.selected_manual_roi]
             roi_type = roi.get("roi_type", "manual")
             self.trace_canvas.plot_traces(
@@ -1623,35 +2304,81 @@ class CurationWindow(QMainWindow):
         if not np.any(mask):
             self.trace_canvas.plot_empty("Selected suite2p ROI has no pixels")
             return
-        f, fneu, fcorr, dff, _ = self.traces_for_mask(mask)
+        f, fneu, fcorr, dff, _, _ = self.traces_for_mask(
+            mask,
+            exclusion_mask=self.final_roi_exclusion_mask(mask.shape, exclude_suite2p_idx=self.selected_roi),
+        )
         self.trace_canvas.plot_traces(f"suite2p ROI {self.selected_roi}", f, fneu, fcorr, dff)
 
-    def frame_pixmap(self, view: str) -> QPixmap:
+    def base_frame_pixmap(self) -> QPixmap:
+        key = (int(self.frame_index), round(float(self.low_pct), 3), round(float(self.high_pct), 3))
+        cached = self._base_pixmap_cache.get(key)
+        if cached is not None:
+            return QPixmap(cached)
         frame = normalize_frame(self.movie[self.frame_index], self.low_pct, self.high_pct)
         height, width = frame.shape
         qimg = QImage(frame.data, width, height, width, QImage.Format.Format_Grayscale8).copy()
         pixmap = QPixmap.fromImage(qimg)
-        painter = QPainter(pixmap)
+        self._base_pixmap_cache.clear()
+        self._base_pixmap_cache[key] = QPixmap(pixmap)
+        return pixmap
+
+    def overlay_cache_key(self, view: str) -> tuple:
+        return (
+            view,
+            self._roi_overlay_revision,
+            bool(self.show_suite2p_refs),
+            bool(self.show_suite2p_iscell0.isChecked()),
+            bool(self.show_final_rois.isChecked()),
+            self.selected_roi,
+            self.selected_manual_roi,
+            tuple(sorted(self.selected_suite2p_refs)),
+            len(self.added_rois),
+        )
+
+    def static_overlay_pixmap(self, view: str, width: int, height: int) -> QPixmap:
+        key = self.overlay_cache_key(view)
+        cached = self._overlay_pixmap_cache.get(key)
+        if cached is not None:
+            return QPixmap(cached)
+        overlay = QPixmap(width, height)
+        overlay.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(overlay)
         if view == "reference":
             self.paint_suite2p_rois(painter, selected_only=False)
         elif view == "edit":
             self.paint_suite2p_rois(painter, selected_only=True)
         if view != "edit" or self.show_final_rois.isChecked():
             self.paint_added_rois(painter)
+        painter.end()
+        if len(self._overlay_pixmap_cache) > 8:
+            self._overlay_pixmap_cache.clear()
+        self._overlay_pixmap_cache[key] = QPixmap(overlay)
+        return overlay
+
+    def frame_pixmap(self, view: str) -> QPixmap:
+        pixmap = self.base_frame_pixmap()
+        painter = QPainter(pixmap)
+        painter.drawPixmap(0, 0, self.static_overlay_pixmap(view, pixmap.width(), pixmap.height()))
         self.paint_current_polygon(painter)
+        self.paint_selection_box(painter)
         painter.end()
         return pixmap
 
     def paint_suite2p_rois(self, painter: QPainter, selected_only: bool) -> None:
+        selected_suite2p, _ = self.selected_final_sets()
         if selected_only:
             if not self.show_final_rois.isChecked():
                 return
         elif not self.show_suite2p_refs:
             return
         for idx, roi in enumerate(self.roi_cache):
-            if idx in self.deleted_existing:
-                continue
-            if idx < len(self.suite2p_ref_flags) and not self.suite2p_ref_flags[idx] and not self.show_rejected.isChecked():
+            if (
+                not selected_only
+                and idx < len(self.suite2p_ref_flags)
+                and not self.suite2p_ref_flags[idx]
+                and not self.show_suite2p_iscell0.isChecked()
+            ):
                 continue
             keep = idx in self.selected_suite2p_refs
             if selected_only and not keep:
@@ -1661,7 +2388,7 @@ class CurationWindow(QMainWindow):
             if ypix.size == 0:
                 continue
             color = QColor(0, 255, 80, 230) if keep else QColor(255, 128, 0, 120)
-            if self.selected_roi == idx:
+            if self.selected_roi == idx or idx in selected_suite2p:
                 color = QColor(255, 220, 0, 255)
             pen = QPen(color)
             pen.setWidth(1)
@@ -1670,23 +2397,18 @@ class CurationWindow(QMainWindow):
                 painter.drawPoint(int(x), int(y))
 
     def paint_added_rois(self, painter: QPainter) -> None:
+        _, selected_manual = self.selected_final_sets()
         pen = QPen(QColor(0, 180, 255, 230))
         pen.setWidth(1)
         painter.setPen(pen)
         for idx, roi in enumerate(self.added_rois):
-            if roi.get("status", "accepted") == "rejected" and not self.show_rejected.isChecked():
-                continue
             points = [QPointF(float(x), float(y)) for x, y in roi.get("points", [])]
             if len(points) < 2:
                 continue
-            if self.selected_manual_roi == idx:
+            if self.selected_manual_roi == idx or idx in selected_manual:
                 selected_pen = QPen(QColor(255, 220, 0, 255))
                 selected_pen.setWidth(2)
                 painter.setPen(selected_pen)
-            elif roi.get("status", "accepted") == "rejected":
-                rejected_pen = QPen(QColor(255, 60, 60, 160))
-                rejected_pen.setWidth(1)
-                painter.setPen(rejected_pen)
             else:
                 painter.setPen(pen)
             for p0, p1 in zip(points, points[1:] + points[:1]):
@@ -1702,6 +2424,23 @@ class CurationWindow(QMainWindow):
         for p0, p1 in zip(points, points[1:]):
             painter.drawLine(p0, p1)
 
+    def paint_selection_box(self, painter: QPainter) -> None:
+        if self.selection_box_start is None or self.selection_box_current is None:
+            return
+        x0, y0 = self.selection_box_start
+        x1, y1 = self.selection_box_current
+        corners = [
+            QPointF(float(x0), float(y0)),
+            QPointF(float(x1), float(y0)),
+            QPointF(float(x1), float(y1)),
+            QPointF(float(x0), float(y1)),
+        ]
+        pen = QPen(QColor(255, 220, 0, 220))
+        pen.setWidth(1)
+        painter.setPen(pen)
+        for p0, p1 in zip(corners, corners[1:] + corners[:1]):
+            painter.drawLine(p0, p1)
+
     def refresh(self) -> None:
         shape = (self.movie.shape[-2], self.movie.shape[-1])
         self.left_canvas.set_rendered_pixmap(self.frame_pixmap(view="reference"), shape)
@@ -1709,25 +2448,21 @@ class CurationWindow(QMainWindow):
         kept = int(len(self.selected_suite2p_refs))
         self.status.showMessage(
             f"trial={self.paths.trial_id} | frame={self.frame_index}/{self.movie.shape[0]-1} | "
-            f"suite2p picks={kept} | deleted refs={len(self.deleted_existing)} | "
-            f"manual={len(self.added_rois)} | drawing points={len(self.current_polygon)}"
+            f"suite2p={kept} | manual={len(self.added_rois)} | "
+            f"removed temp={len(self.removed_rois)} | drawing points={len(self.current_polygon)}"
         )
 
     def roi_center_candidates(self) -> list[tuple[str, int, float, float]]:
         candidates: list[tuple[str, int, float, float]] = []
         if self.show_suite2p_refs:
             for idx, roi in enumerate(self.roi_cache):
-                if idx in self.deleted_existing:
-                    continue
-                if idx < len(self.suite2p_ref_flags) and not self.suite2p_ref_flags[idx] and not self.show_rejected.isChecked():
+                if idx < len(self.suite2p_ref_flags) and not self.suite2p_ref_flags[idx] and not self.show_suite2p_iscell0.isChecked():
                     continue
                 xpix = np.asarray(roi.get("xpix", []), dtype=float)
                 ypix = np.asarray(roi.get("ypix", []), dtype=float)
                 if xpix.size:
                     candidates.append(("suite2p", idx, float(np.mean(xpix)), float(np.mean(ypix))))
         for idx, roi in enumerate(self.added_rois):
-            if roi.get("status", "accepted") == "rejected" and not self.show_rejected.isChecked():
-                continue
             candidates.append(("manual", idx, float(roi.get("x_mean", 0.0)), float(roi.get("y_mean", 0.0))))
         return candidates
 
@@ -1836,6 +2571,7 @@ class CurationWindow(QMainWindow):
         super().keyPressEvent(event)
 
     def save_outputs(self, show_message: bool = True) -> None:
+        self.ensure_manual_traces_current()
         self.paths.output_dir.mkdir(parents=True, exist_ok=True)
         iscell_path = self.paths.output_dir / f"{self.paths.trial_id}_iscell_manual.npy"
         kept_path = self.paths.output_dir / f"{self.paths.trial_id}_selected_suite2p_indices.csv"
@@ -1851,17 +2587,13 @@ class CurationWindow(QMainWindow):
         for idx in self.selected_suite2p_refs:
             iscell_to_save[idx, 0] = 1.0
             iscell_to_save[idx, 1] = 1.0
-        if self.deleted_existing:
-            deleted_arr = np.asarray(sorted(self.deleted_existing), dtype=int)
-            iscell_to_save[deleted_arr, 0] = 0.0
-            iscell_to_save[deleted_arr, 1] = 0.0
         np.save(iscell_path, iscell_to_save)
 
         kept_indices = np.asarray(sorted(self.selected_suite2p_refs), dtype=int)
         np.savetxt(kept_path, kept_indices, fmt="%d", delimiter=",", header="suite2p_original_id", comments="")
         np.savetxt(
             deleted_path,
-            np.asarray(sorted(self.deleted_existing), dtype=int),
+            np.asarray([], dtype=int),
             fmt="%d",
             delimiter=",",
             header="suite2p_original_id",
@@ -1887,12 +2619,30 @@ class CurationWindow(QMainWindow):
                     "med": np.array([float(np.mean(ypix)), float(np.mean(xpix))], dtype=np.float32) if xpix.size else np.array([np.nan, np.nan]),
                     "npix": int(len(xpix)),
                     "overlap": np.zeros(len(xpix), dtype=bool),
+                    "roi_source": "suite2p",
+                    "roi_type": "suite2p",
+                    "source_roi_id": f"suite2p_{int(idx)}",
+                    "manual_roi_id": -1,
                     "suite2p_original_id": int(idx),
                 }
             )
             mask = self.suite2p_mask(int(idx))
             if np.any(mask):
-                f, fneu, _, _, _ = self.traces_for_mask(mask)
+                exclusion = self.final_roi_exclusion_mask(mask.shape, exclude_suite2p_idx=int(idx))
+                neuropil = annulus_mask(mask, exclusion_mask=exclusion)
+                neuropil_ypix, neuropil_xpix = np.nonzero(neuropil)
+                suite2p_stat[-1].update(
+                    {
+                        "neuropil_ypix": neuropil_ypix.astype(np.int32),
+                        "neuropil_xpix": neuropil_xpix.astype(np.int32),
+                        "neuropil_npix": int(neuropil.sum()),
+                        "neuropil_exclusion": "other_final_rois",
+                    }
+                )
+                f, fneu, _, _, _, _ = self.traces_for_mask(
+                    mask,
+                    exclusion_mask=exclusion,
+                )
                 suite2p_f_rows.append(np.asarray(f, dtype=np.float32))
                 suite2p_fneu_rows.append(np.asarray(fneu, dtype=np.float32))
             points = ordered_boundary_points(ypix, xpix)
@@ -1901,6 +2651,7 @@ class CurationWindow(QMainWindow):
             new_roi_set.append(
                 {
                     "roi_id": f"suite2p_{idx}",
+                    "source_roi_id": f"suite2p_{idx}",
                     "roi_source": "suite2p_reference",
                     "suite2p_original_id": int(idx),
                     "n_pixels": int(len(xpix)),
@@ -1910,22 +2661,48 @@ class CurationWindow(QMainWindow):
                 }
             )
         trace_rows = []
-        for roi in self.added_rois:
+        for manual_idx, roi in enumerate(self.added_rois):
             clean = {k: v for k, v in roi.items() if not k.startswith("_trace_")}
             serializable_rois.append(clean)
             if roi.get("status", "accepted") == "accepted":
                 points = [(float(x), float(y)) for x, y in roi.get("points", [])]
                 if len(points) >= 3:
                     mask = polygon_mask(points, self.movie.shape[-2:])
-                    suite2p_stat.append(stat_dict_from_mask(mask, int(roi["manual_roi_id"])))
+                    stat_entry = stat_dict_from_mask(mask, int(roi["manual_roi_id"]))
+                    previous_suite2p_id = roi.get("suite2p_original_id")
+                    stat_entry.update(
+                        {
+                            "roi_source": "manual",
+                            "roi_type": str(roi.get("roi_type", "manual")),
+                            "source_roi_id": f"manual_{int(roi['manual_roi_id'])}",
+                        }
+                    )
+                    if previous_suite2p_id is not None:
+                        try:
+                            stat_entry["previous_suite2p_original_id"] = int(previous_suite2p_id)
+                        except (TypeError, ValueError):
+                            pass
+                    exclusion = self.final_roi_exclusion_mask(mask.shape, exclude_manual_idx=manual_idx)
+                    neuropil = annulus_mask(mask, exclusion_mask=exclusion)
+                    neuropil_ypix, neuropil_xpix = np.nonzero(neuropil)
+                    stat_entry.update(
+                        {
+                            "neuropil_ypix": neuropil_ypix.astype(np.int32),
+                            "neuropil_xpix": neuropil_xpix.astype(np.int32),
+                            "neuropil_npix": int(neuropil.sum()),
+                            "neuropil_exclusion": "other_final_rois",
+                        }
+                    )
+                    suite2p_stat.append(stat_entry)
                     fiji_rois.append((safe_roi_name("manual", int(roi["manual_roi_id"])), points))
                 suite2p_f_rows.append(np.asarray(roi["_trace_F"], dtype=np.float32))
                 suite2p_fneu_rows.append(np.asarray(roi["_trace_Fneu"], dtype=np.float32))
                 new_roi_set.append(
                     {
+                        **clean,
                         "roi_id": f"manual_{roi['manual_roi_id']}",
                         "roi_source": "manual",
-                        **clean,
+                        "source_roi_id": f"manual_{roi['manual_roi_id']}",
                     }
                 )
             n_frames = len(roi.get("_trace_F", []))
@@ -1942,6 +2719,22 @@ class CurationWindow(QMainWindow):
                 )
         with additions_path.open("w", encoding="utf-8") as handle:
             json.dump(serializable_rois, handle, indent=2)
+
+        if (
+            len(suite2p_stat) == len(new_roi_set)
+            and len(suite2p_f_rows) == len(suite2p_stat)
+            and len(suite2p_fneu_rows) == len(suite2p_stat)
+        ):
+            order = sorted(range(len(suite2p_stat)), key=lambda i: final_roi_sort_key(suite2p_stat[i]))
+            suite2p_stat = [suite2p_stat[i] for i in order]
+            suite2p_f_rows = [suite2p_f_rows[i] for i in order]
+            suite2p_fneu_rows = [suite2p_fneu_rows[i] for i in order]
+            new_roi_set = [new_roi_set[i] for i in order]
+            for final_idx, (stat_entry, roi_record) in enumerate(zip(suite2p_stat, new_roi_set), start=1):
+                stat_entry["final_roi_id"] = int(final_idx)
+                roi_record["final_roi_id"] = int(final_idx)
+                roi_record["roi_id"] = f"roi_{final_idx:04d}"
+
         with new_roi_set_path.open("w", encoding="utf-8") as handle:
             json.dump(new_roi_set, handle, indent=2)
         np.save(suite2p_compat_dir / "stat.npy", np.asarray(suite2p_stat, dtype=object))
@@ -1978,20 +2771,21 @@ class CurationWindow(QMainWindow):
             "manual_added_roi_traces_path": str(trace_path) if trace_rows else None,
             "n_suite2p_roi": int(len(self.iscell)),
             "n_selected_suite2p_reference_roi": int(len(kept_indices)),
-            "n_deleted_suite2p_reference_roi": int(len(self.deleted_existing)),
+            "n_deleted_suite2p_reference_roi": 0,
             "n_manual_added_roi": int(len(self.added_rois)),
-            "n_manual_added_accepted_roi": int(sum(roi.get("status", "accepted") == "accepted" for roi in self.added_rois)),
-            "n_manual_added_rejected_roi": int(sum(roi.get("status", "accepted") == "rejected" for roi in self.added_rois)),
+            "n_manual_added_accepted_roi": int(len(self.added_rois)),
             "n_new_roi_set": int(len(new_roi_set)),
             "n_suite2p_compatible_roi": int(len(suite2p_stat)),
             "n_fiji_roi": int(len(fiji_rois)),
             "neuropil_coeff": float(self.neuropil_coeff),
+            "neuropil_mask_source": "local_annulus_excluding_other_final_rois",
             "f0_percentile": float(self.f0_percentile),
             "note": (
                 "The saved manual ROI set contains accepted manual ROIs plus selected "
                 "suite2p reference ROIs only. Suite2p source files are not edited in place. "
                 "Displayed and exported ROI traces use the motion-corrected movie when available, while "
-                "brightness/contrast controls affect display only."
+                "brightness/contrast controls affect display only. Fneu uses a local annulus around each "
+                "ROI and excludes pixels belonging to other accepted final ROIs."
             ),
         }
         with summary_path.open("w", encoding="utf-8") as handle:
@@ -2001,7 +2795,7 @@ class CurationWindow(QMainWindow):
             QMessageBox.information(self, "Saved", f"Saved manual curation to:\n{self.paths.output_dir}")
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
-        if self.maybe_save_before_switch():
+        if self.maybe_save_before_switch(reason="closing"):
             event.accept()
         else:
             event.ignore()
