@@ -14,26 +14,35 @@ mkdir -p "${OUT_DIR}"
 
 "${CONDA_BIN}" info > "${OUT_DIR}/conda_info.txt"
 "${CONDA_BIN}" env list > "${OUT_DIR}/conda_env_list.txt"
+"${CONDA_BIN}" env list --json > "${OUT_DIR}/conda_env_list.json"
 
-"${CONDA_BIN}" env list | awk '
-  /^[[:space:]]*#/ {next}
-  NF >= 1 {
-    name=$1
-    if (name == "*") {
-      name=$2
-    }
-    if (name != "" && name != "base") {
-      print name
-    }
-  }
-' | sort -u > "${OUT_DIR}/env_names.txt"
+python3 - "${OUT_DIR}/conda_env_list.json" > "${OUT_DIR}/env_paths.tsv" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
 
-while IFS= read -r env_name; do
-  safe_name="$(printf '%s' "${env_name}" | tr '/ :' '___')"
-  echo "Exporting ${env_name}"
-  "${CONDA_BIN}" env export -n "${env_name}" > "${OUT_DIR}/${safe_name}.yml"
-  "${CONDA_BIN}" list -n "${env_name}" > "${OUT_DIR}/${safe_name}_packages.txt"
-done < "${OUT_DIR}/env_names.txt"
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    payload = json.load(handle)
+
+seen = set()
+for env_path in payload.get("envs", []):
+    path = Path(env_path)
+    if env_path in seen:
+        continue
+    seen.add(env_path)
+    name = path.name or "env"
+    if name == "envs" and path.parent.name:
+        name = path.parent.name
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", name).strip("_") or "env"
+    print(f"{env_path}\t{safe}")
+PY
+
+while IFS=$'\t' read -r env_path safe_name; do
+  echo "Exporting ${safe_name} (${env_path})"
+  "${CONDA_BIN}" env export -p "${env_path}" > "${OUT_DIR}/${safe_name}.yml"
+  "${CONDA_BIN}" list -p "${env_path}" > "${OUT_DIR}/${safe_name}_packages.txt"
+done < "${OUT_DIR}/env_paths.tsv"
 
 echo
 echo "Wrote conda environment exports to: ${OUT_DIR}"
