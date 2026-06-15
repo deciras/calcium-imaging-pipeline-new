@@ -130,7 +130,7 @@ def should_move_to_original_root(path: Path) -> bool:
         return False
     if path.is_dir():
         try:
-            return folder_has_own_oir(path)
+            return folder_has_own_oir(path) or bool(existing_trial_dirs(path))
         except OSError:
             return False
     if path.is_file():
