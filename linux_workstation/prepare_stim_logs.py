@@ -5,7 +5,8 @@ Collect stimulus controller logs into DATA_ROOT/stim_logs.
 
 Step 02 looks for timestamp_log_*.csv files in one stimulus log folder. The raw
 workstation export may instead contain many date-specific *_motor_rotation
-folders. This helper creates a flat stim_logs folder using symlinks by default.
+folders. This helper can move those raw folders into DATA_ROOT/00_stim_logs_raw
+and creates a flat stim_logs folder using symlinks by default.
 """
 
 from __future__ import annotations
@@ -42,13 +43,26 @@ class SynthConfigPlan:
     run_id: str
 
 
+@dataclass(frozen=True)
+class MoveDirPlan:
+    source: Path
+    destination: Path
+    action: str
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Prepare a flat stim_logs folder from *_motor_rotation folders."
     )
     parser.add_argument("data_root", type=Path, help="Experiment data root.")
     parser.add_argument("--target-name", default="stim_logs", help="Output folder name under data root.")
+    parser.add_argument("--raw-root-name", default="00_stim_logs_raw", help="Folder for original *_motor_rotation folders.")
     parser.add_argument("--source-glob", default="*_motor_rotation", help="Direct child folders to collect from.")
+    parser.add_argument(
+        "--organize-raw",
+        action="store_true",
+        help="Move direct DATA_ROOT/*_motor_rotation folders into DATA_ROOT/00_stim_logs_raw first.",
+    )
     parser.add_argument(
         "--mode",
         choices=("symlink", "copy"),
@@ -67,11 +81,35 @@ def parse_run_id(path: Path, prefix: str, suffix: str) -> str | None:
     return name[len(prefix) : -len(suffix)]
 
 
-def collect_source_files(data_root: Path, source_glob: str) -> list[Path]:
-    files: list[Path] = []
-    for folder in sorted(data_root.glob(source_glob)):
-        if not folder.is_dir():
+def build_move_dir_plans(data_root: Path, raw_root: Path, source_glob: str) -> list[MoveDirPlan]:
+    plans: list[MoveDirPlan] = []
+    for source in sorted(data_root.glob(source_glob)):
+        if not source.is_dir() or source == raw_root:
             continue
+        destination = raw_root / source.name
+        action = "create" if not destination.exists() else "skip-existing"
+        plans.append(MoveDirPlan(source=source, destination=destination, action=action))
+    return plans
+
+
+def apply_move_dir_plan(plan: MoveDirPlan) -> None:
+    if plan.action == "skip-existing":
+        return
+    plan.destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(plan.source), str(plan.destination))
+
+
+def source_folders(data_root: Path, raw_root: Path, source_glob: str) -> list[Path]:
+    folders: list[Path] = []
+    if raw_root.exists():
+        folders.extend(sorted(path for path in raw_root.glob(source_glob) if path.is_dir()))
+    folders.extend(sorted(path for path in data_root.glob(source_glob) if path.is_dir()))
+    return sorted(set(folders))
+
+
+def collect_source_files(data_root: Path, raw_root: Path, source_glob: str) -> list[Path]:
+    files: list[Path] = []
+    for folder in source_folders(data_root, raw_root, source_glob):
         for pattern in LOG_PATTERNS:
             files.extend(sorted(path for path in folder.glob(pattern) if path.is_file()))
     return sorted(set(files))
@@ -186,7 +224,21 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     target_root = data_root / args.target_name
-    files = collect_source_files(data_root, args.source_glob)
+    raw_root = data_root / args.raw_root_name
+    move_plans = build_move_dir_plans(data_root, raw_root, args.source_glob)
+
+    if args.organize_raw:
+        if args.execute:
+            raw_root.mkdir(parents=True, exist_ok=True)
+            for plan in move_plans:
+                apply_move_dir_plan(plan)
+        else:
+            print(f"Would organize raw stimulus folders into: {raw_root}")
+            for plan in move_plans:
+                print(f"  {plan.action:13s} {plan.source.name} -> {args.raw_root_name}/{plan.source.name}")
+            print()
+
+    files = collect_source_files(data_root, raw_root, args.source_glob)
     link_plans = build_link_plans(files, target_root, overwrite=args.overwrite)
     synth_plans = build_synth_config_plans(files, target_root, overwrite=args.overwrite)
 
@@ -194,7 +246,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Mode      : {mode}")
     print(f"Data root : {data_root}")
     print(f"Target    : {target_root}")
-    print(f"Sources   : {args.source_glob}")
+    print(f"Raw root  : {raw_root}")
+    print(f"Sources   : {args.raw_root_name}/{args.source_glob}, {args.source_glob}")
     print(f"Files     : {len(files)}")
     print()
 

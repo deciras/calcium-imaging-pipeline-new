@@ -67,7 +67,7 @@ echo
 cd "${REPO_ROOT}"
 
 if [[ "${PREPARE_STIM_LOGS}" != "0" ]]; then
-  PREPARE_ARGS=("${DATA_ROOT}" --mode "${STIM_LOG_MODE}")
+  PREPARE_ARGS=("${DATA_ROOT}" --mode "${STIM_LOG_MODE}" --overwrite)
   if [[ "${PIPELINE_DRY_RUN}" == "0" ]]; then
     PREPARE_ARGS+=(--execute)
   fi

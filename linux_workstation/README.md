@@ -97,26 +97,27 @@ bash linux_workstation/run_00_05_suite2p.sh "$DATA_ROOT" --dry-run
 
 ## 整理刺激参数合集
 
-你的原始目录里有类似这样的刺激控制记录：
+你的原始目录里有类似这样的刺激控制记录。建议把它们统一放在 `00_stim_logs_raw/`：
 
 ```text
-20260428_motor_rotation/
-  timestamp_log_20260428_170422.csv
-  stim_map_20260428_170422.csv
-  experiment_config_20260428_170422.json
-  20260428_170422_angle_list.txt
+00_stim_logs_raw/
+  20260428_motor_rotation/
+    timestamp_log_20260428_170422.csv
+    stim_map_20260428_170422.csv
+    experiment_config_20260428_170422.json
+    20260428_170422_angle_list.txt
 ```
 
 02 默认会从 `$DATA_ROOT/stim_logs/` 读取这些记录。可以先预览整理计划：
 
 ```bash
-bash linux_workstation/prepare_stim_logs.sh "$DATA_ROOT"
+bash linux_workstation/prepare_stim_logs.sh "$DATA_ROOT" --organize-raw
 ```
 
-确认后创建 `stim_logs/`：
+确认后移动顶层 `*_motor_rotation` 到 `00_stim_logs_raw/`，并创建/刷新 `stim_logs/`：
 
 ```bash
-bash linux_workstation/prepare_stim_logs.sh "$DATA_ROOT" --execute
+bash linux_workstation/prepare_stim_logs.sh "$DATA_ROOT" --organize-raw --overwrite --execute
 ```
 
 默认在 Linux 上用 symlink，不复制大批文件。早期只有 `mcu_config_*.json`、没有 `experiment_config_*.json` 的记录，会自动生成一个兼容 02 的 `experiment_config_*.json`。
