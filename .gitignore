@@ -21,6 +21,11 @@ Thumbs.db
 *.log
 logs/
 
+# Local-only inspection/test artifacts
+test_dataset/
+structure.html
+.codex/attachments/
+
 # Large calcium imaging raw/intermediate data
 *.oir
 *.oib
@@ -74,5 +79,4 @@ raw/
 processed/
 Processed_TIF/
 benchmark/
-
 
