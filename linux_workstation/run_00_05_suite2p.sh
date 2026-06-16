@@ -58,10 +58,19 @@ mkdir -p "${LOG_ROOT}"
 STAMP="$(date +%Y%m%d_%H%M%S)"
 LOG_FILE="${LOG_ROOT}/linux_00_05_suite2p_${STAMP}.log"
 
+PIPELINE_TMPDIR="${PIPELINE_TMPDIR:-${DATA_ROOT%/}/.tmp}"
+PIPELINE_CACHE_DIR="${PIPELINE_CACHE_DIR:-${DATA_ROOT%/}/.cache}"
+mkdir -p "${PIPELINE_TMPDIR}" "${PIPELINE_CACHE_DIR}" "${PIPELINE_CACHE_DIR}/matplotlib"
+export TMPDIR="${TMPDIR:-${PIPELINE_TMPDIR}}"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-${PIPELINE_CACHE_DIR}}"
+export MPLCONFIGDIR="${MPLCONFIGDIR:-${PIPELINE_CACHE_DIR}/matplotlib}"
+
 echo "Repository : ${REPO_ROOT}"
 echo "Data root  : ${DATA_ROOT}"
 echo "Action     : ${ACTION}"
 echo "Log file   : ${LOG_FILE}"
+echo "TMPDIR     : ${TMPDIR}"
+echo "Cache dir  : ${XDG_CACHE_HOME}"
 echo
 
 cd "${REPO_ROOT}"

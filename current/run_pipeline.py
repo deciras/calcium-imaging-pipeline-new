@@ -19,6 +19,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -843,8 +844,13 @@ def run_step(step: ResolvedStep) -> bool:
     LOGGER.info("Command: %s", subprocess.list2cmdline(step.command))
 
     child_env = os.environ.copy()
-    child_env.setdefault("MPLCONFIGDIR", "/private/tmp/matplotlib")
-    child_env.setdefault("XDG_CACHE_HOME", "/private/tmp")
+    tmp_root = Path(child_env.get("TMPDIR") or tempfile.gettempdir()).expanduser()
+    cache_root = Path(child_env.get("XDG_CACHE_HOME") or tmp_root / "calcium_pipeline_cache").expanduser()
+    cache_root.mkdir(parents=True, exist_ok=True)
+    (cache_root / "matplotlib").mkdir(parents=True, exist_ok=True)
+    child_env.setdefault("TMPDIR", str(tmp_root))
+    child_env.setdefault("XDG_CACHE_HOME", str(cache_root))
+    child_env.setdefault("MPLCONFIGDIR", str(cache_root / "matplotlib"))
 
     try:
         process = subprocess.Popen(

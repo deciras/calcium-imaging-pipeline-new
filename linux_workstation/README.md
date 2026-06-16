@@ -203,6 +203,21 @@ bash linux_workstation/run_00_05_suite2p.sh "$DATA_ROOT"
 
 如果机器内存不是特别大，建议先保持 `N_WORKERS=1`，让 suite2p 在单个 trial 内多线程。
 
+Linux runner 会自动创建并使用：
+
+```text
+$DATA_ROOT/.tmp
+$DATA_ROOT/.cache
+```
+
+这些目录用于 Python、CaImAn、pynwb、matplotlib 等包的临时文件和缓存，避免 Linux 上误用 macOS 风格的 `/private/tmp`。如果需要改到别的位置，可以在启动前设置：
+
+```bash
+PIPELINE_TMPDIR=/tmp/calcium_pipeline_tmp \
+PIPELINE_CACHE_DIR=/tmp/calcium_pipeline_cache \
+bash linux_workstation/run_00_05_suite2p.sh "$DATA_ROOT"
+```
+
 ## 单独打开 manual GUI
 
 GUI 不属于 overnight 00-05。前半段跑完后，如果你想在 Linux 上看 ROI，可以单独启动：

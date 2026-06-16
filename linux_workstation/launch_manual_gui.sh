@@ -32,6 +32,13 @@ fi
 
 cd "${REPO_ROOT}"
 
+PIPELINE_TMPDIR="${PIPELINE_TMPDIR:-${DATA_ROOT%/}/.tmp}"
+PIPELINE_CACHE_DIR="${PIPELINE_CACHE_DIR:-${DATA_ROOT%/}/.cache}"
+mkdir -p "${PIPELINE_TMPDIR}" "${PIPELINE_CACHE_DIR}" "${PIPELINE_CACHE_DIR}/matplotlib"
+export TMPDIR="${TMPDIR:-${PIPELINE_TMPDIR}}"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-${PIPELINE_CACHE_DIR}}"
+export MPLCONFIGDIR="${MPLCONFIGDIR:-${PIPELINE_CACHE_DIR}/matplotlib}"
+
 ARGS=(
   current/run_pipeline.py
   --steps manual
