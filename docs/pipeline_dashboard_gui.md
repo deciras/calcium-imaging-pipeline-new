@@ -33,6 +33,8 @@ Default Fiji paths:
 The Fiji field stays editable. Use `Browse` to choose a different Fiji install,
 then `Set default` to remember that path for future dashboard launches on the
 same computer.
+On macOS, saving `/Applications/Fiji.app` is OK; the conversion step resolves it
+to the executable inside the app bundle before launching Fiji.
 
 Priority order:
 

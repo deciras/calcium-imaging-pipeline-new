@@ -62,14 +62,37 @@ def candidate_fiji_bins() -> list[Path]:
     return candidates
 
 
+def resolve_fiji_executable(path: Path) -> Path | None:
+    path = path.expanduser()
+    if not path.exists():
+        return None
+    if path.is_file():
+        return path if os.access(path, os.X_OK) else None
+
+    bundled_candidates = [
+        path / "Contents" / "MacOS" / "ImageJ-macosx",
+        path / "Contents" / "MacOS" / "ImageJ-macosx-arm64",
+        path / "Contents" / "MacOS" / "ImageJ-macosx-x64",
+        path / "fiji",
+        path / "ImageJ-linux64",
+        path / "ImageJ-linux32",
+        path / "fiji-linux-x64",
+        path / "fiji-linux64",
+    ]
+    for candidate in bundled_candidates:
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
 def find_fiji_bin(explicit_path: Path | None) -> Path | None:
     if explicit_path is not None:
-        path = explicit_path.expanduser()
-        return path if path.exists() else None
+        return resolve_fiji_executable(explicit_path)
 
     for candidate in candidate_fiji_bins():
-        if candidate.exists():
-            return candidate
+        resolved = resolve_fiji_executable(candidate)
+        if resolved is not None:
+            return resolved
     return None
 
 
