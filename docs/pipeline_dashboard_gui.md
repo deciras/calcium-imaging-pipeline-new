@@ -24,3 +24,18 @@ Typical use:
 The `Open manual GUI` button launches the existing manual ROI curation GUI via
 the existing `manual` pipeline step. The manual GUI implementation and behavior
 remain separate from this dashboard.
+
+Default Fiji paths:
+
+- macOS: `/Applications/Fiji.app`
+- Linux workstation: `/home/yifei/Fiji/fiji-linux-x64`
+
+The Fiji field stays editable. Use `Browse` to choose a different Fiji install,
+then `Set default` to remember that path for future dashboard launches on the
+same computer.
+
+Priority order:
+
+1. Fiji path saved with `Set default`
+2. `FIJI_BIN` or `FIJI_PATH` environment variable
+3. Platform default listed above

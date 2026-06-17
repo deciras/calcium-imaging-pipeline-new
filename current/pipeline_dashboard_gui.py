@@ -10,12 +10,13 @@ in a child process so the Qt event loop stays responsive.
 from __future__ import annotations
 
 import os
+import platform
 import re
 import shlex
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QProcess, QProcessEnvironment, Qt
+from PySide6.QtCore import QProcess, QProcessEnvironment, QSettings, Qt
 from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -81,6 +82,7 @@ class PipelineDashboard(QMainWindow):
         self.repo_root = Path(__file__).resolve().parents[1]
         self.current_dir = self.repo_root / "current"
         self.pipeline_script = self.current_dir / "run_pipeline.py"
+        self.settings = QSettings("calcium-imaging-pipeline", "pipeline-dashboard")
         self.process: QProcess | None = None
         self._buffer = ""
         self.step_state: dict[str, str] = {step: "idle" for step, _ in STEP_ROWS}
@@ -98,9 +100,11 @@ class PipelineDashboard(QMainWindow):
         browse_data_btn.clicked.connect(self.browse_data_root)
 
         self.conda_bin_edit = QLineEdit(os.environ.get("CONDA_BIN", "conda"))
-        self.fiji_bin_edit = QLineEdit(os.environ.get("FIJI_BIN", os.environ.get("FIJI_PATH", "")))
+        self.fiji_bin_edit = QLineEdit(self.default_fiji_path())
         browse_fiji_btn = QPushButton("Browse")
         browse_fiji_btn.clicked.connect(self.browse_fiji_bin)
+        save_fiji_default_btn = QPushButton("Set default")
+        save_fiji_default_btn.clicked.connect(self.save_fiji_default)
 
         self.step_group_combo = QComboBox()
         for value, label in STEP_GROUPS:
@@ -150,6 +154,7 @@ class PipelineDashboard(QMainWindow):
         fiji_row = QHBoxLayout()
         fiji_row.addWidget(self.fiji_bin_edit)
         fiji_row.addWidget(browse_fiji_btn)
+        fiji_row.addWidget(save_fiji_default_btn)
 
         config_form = QFormLayout()
         config_form.addRow("Data root", data_row)
@@ -235,15 +240,40 @@ class PipelineDashboard(QMainWindow):
         spin.setValue(value)
         return spin
 
+    def default_fiji_path(self) -> str:
+        saved = self.settings.value("fiji_path", "", type=str)
+        if saved:
+            return saved
+        configured = os.environ.get("FIJI_BIN") or os.environ.get("FIJI_PATH")
+        if configured:
+            return configured
+        if platform.system() == "Darwin":
+            return "/Applications/Fiji.app"
+        if platform.system() == "Linux":
+            return "/home/yifei/Fiji/fiji-linux-x64"
+        return ""
+
     def browse_data_root(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Select data root", self.data_root_edit.text() or str(Path.home()))
         if path:
             self.data_root_edit.setText(path)
 
     def browse_fiji_bin(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Select Fiji executable", self.fiji_bin_edit.text() or str(Path.home()))
+        current = self.fiji_bin_edit.text() or str(Path.home())
+        path = QFileDialog.getExistingDirectory(self, "Select Fiji app or directory", current)
+        if not path:
+            path, _ = QFileDialog.getOpenFileName(self, "Select Fiji executable", current)
         if path:
             self.fiji_bin_edit.setText(path)
+
+    def save_fiji_default(self) -> None:
+        path = self.fiji_bin_edit.text().strip()
+        if not path:
+            QMessageBox.warning(self, "Fiji default", "Set a Fiji path before saving it as the default.")
+            return
+        self.settings.setValue("fiji_path", path)
+        self.settings.sync()
+        self.append_log(f"Saved Fiji default: {path}\n")
 
     def selected_steps_text(self) -> str:
         selected: list[str] = []
