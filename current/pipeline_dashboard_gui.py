@@ -126,7 +126,7 @@ class PipelineDashboard(QMainWindow):
         self.step_dry_run_check = QCheckBox("step dry-run")
         self.step_dry_run_check.setChecked(False)
 
-        self.fiji_memory_edit = QLineEdit(os.environ.get("FIJI_MEMORY", "32G"))
+        self.fiji_memory_edit = QLineEdit(os.environ.get("FIJI_MEMORY", self.default_fiji_memory()))
         self.suite2p_threads_spin = self.integer_spin(1, 128, int(os.environ.get("SUITE2P_THREADS", "8")))
         self.n_workers_spin = self.integer_spin(1, 64, int(os.environ.get("N_WORKERS", "1")))
         self.num_threads_spin = self.integer_spin(1, 128, int(os.environ.get("NUM_THREADS", "1")))
@@ -253,6 +253,12 @@ class PipelineDashboard(QMainWindow):
             return "/home/yifei/Fiji/fiji-linux-x64"
         return ""
 
+    @staticmethod
+    def default_fiji_memory() -> str:
+        if platform.system() == "Linux":
+            return "64G"
+        return "16G"
+
     def browse_data_root(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Select data root", self.data_root_edit.text() or str(Path.home()))
         if path:
@@ -357,7 +363,7 @@ class PipelineDashboard(QMainWindow):
         fiji_bin = self.fiji_bin_edit.text().strip()
         if fiji_bin:
             env.insert("FIJI_BIN", fiji_bin)
-        env.insert("FIJI_MEMORY", self.fiji_memory_edit.text().strip() or "32G")
+        env.insert("FIJI_MEMORY", self.fiji_memory_edit.text().strip() or self.default_fiji_memory())
         env.insert("SUITE2P_THREADS", str(self.suite2p_threads_spin.value()))
         env.insert("N_WORKERS", str(self.n_workers_spin.value()))
         env.insert("NUM_THREADS", str(self.num_threads_spin.value()))

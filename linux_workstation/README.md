@@ -2,6 +2,8 @@
 
 这份入口是给 Linux 工作站 overnight 跑前半段用的。
 
+核心原则：Linux workstation 和 Mac 应该即刻同步化。除了操作系统差异、绝对路径、Fiji/conda 位置和少量平台入口脚本不同之外，代码逻辑、步骤顺序、数据目录结构、文件命名、参数含义、README 说明和运行日志都要一致。不要在两台机器上维护两套不同规则。
+
 你当前工作站上的代码目录是：
 
 ```bash
@@ -13,6 +15,19 @@ REPO_ROOT=/mnt/50d357b2-473b-4533-8c74-1db99704876a/yifeiding/calcium_imaging/ca
 ```bash
 DATA_ROOT=/mnt/50d357b2-473b-4533-8c74-1db99704876a/yifeiding/calcium_imaging/2026_olympus
 ```
+
+本地和工作站统一使用同一套数据结构：
+
+```text
+DATA_ROOT/
+  00_original_files/
+  00_stim_logs_raw/
+  01_oir_to_tif/
+  02_stim_map/
+  ...
+```
+
+其中 `00_original_files/` 只放显微镜原始数据，`00_stim_logs_raw/` 只放刺激控制程序导出的原始参数合集。
 
 后面的命令都假设先进入代码目录：
 
@@ -108,19 +123,19 @@ bash linux_workstation/run_00_05_suite2p.sh "$DATA_ROOT" --dry-run
     20260428_170422_angle_list.txt
 ```
 
-02 默认会从 `$DATA_ROOT/stim_logs/` 读取这些记录。可以先预览整理计划：
+02 现在默认优先从 `$DATA_ROOT/00_stim_logs_raw/` 读取这些记录；如果老数据只有 `$DATA_ROOT/stim_logs/`，才会回退到旧入口。可以先预览整理计划：
 
 ```bash
 bash linux_workstation/prepare_stim_logs.sh "$DATA_ROOT" --organize-raw
 ```
 
-确认后移动顶层 `*_motor_rotation` 到 `00_stim_logs_raw/`，并创建/刷新 `stim_logs/`：
+确认后移动顶层 `*_motor_rotation` 到 `00_stim_logs_raw/`，并创建/刷新兼容旧逻辑用的 `stim_logs/`：
 
 ```bash
 bash linux_workstation/prepare_stim_logs.sh "$DATA_ROOT" --organize-raw --overwrite --execute
 ```
 
-默认在 Linux 上用 symlink，不复制大批文件。早期只有 `mcu_config_*.json`、没有 `experiment_config_*.json` 的记录，会自动生成一个兼容 02 的 `experiment_config_*.json`。
+默认在 Linux 上用 symlink，不复制大批文件。`stim_logs/` 只是 flat index，不是原始刺激参数归档；原始合集仍以 `00_stim_logs_raw/` 为准。早期只有 `mcu_config_*.json`、没有 `experiment_config_*.json` 的记录，会自动生成一个兼容 02 的 `experiment_config_*.json`。
 
 `run_00_05_suite2p.sh` 默认会在正式运行前自动执行这一步。想关闭可以：
 
@@ -187,7 +202,7 @@ ACTION=overwrite bash linux_workstation/run_00_05_suite2p.sh "$DATA_ROOT"
 常用参数用环境变量控制：
 
 ```bash
-FIJI_MEMORY=32G \
+FIJI_MEMORY=64G \
 SUITE2P_THREADS=8 \
 N_WORKERS=1 \
 NUM_THREADS=1 \

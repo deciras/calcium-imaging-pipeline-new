@@ -30,6 +30,11 @@ Default Fiji paths:
 - macOS: `/Applications/Fiji.app`
 - Linux workstation: `/home/yifei/Fiji/fiji-linux-x64`
 
+Default Fiji memory:
+
+- macOS: `16G`
+- Linux workstation: `64G`
+
 The Fiji field stays editable. Use `Browse` to choose a different Fiji install,
 then `Set default` to remember that path for future dashboard launches on the
 same computer.
