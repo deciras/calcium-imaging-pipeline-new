@@ -666,7 +666,9 @@ class CurationWindow(QMainWindow):
         self.selected_removed_roi: int | None = None
         self.selection_box_start: tuple[float, float] | None = None
         self.selection_box_current: tuple[float, float] | None = None
+        self.selection_box_target: str | None = None
         self.show_suite2p_refs = False
+        self.selected_candidate_suite2p_refs: set[int] = set()
         self.selected_suite2p_refs: set[int] = set()
         self.added_rois: list[dict] = []
         self.removed_rois: list[dict] = []
@@ -691,6 +693,8 @@ class CurationWindow(QMainWindow):
         self.right_canvas = VideoCanvas()
         self.left_canvas.clicked.connect(self.handle_overlay_click)
         self.left_canvas.double_clicked.connect(self.handle_overlay_double_click)
+        self.left_canvas.dragged.connect(self.handle_overlay_drag)
+        self.left_canvas.released.connect(self.handle_overlay_release)
         self.right_canvas.clicked.connect(self.handle_right_click)
         self.right_canvas.dragged.connect(self.handle_right_drag)
         self.right_canvas.released.connect(self.handle_right_release)
@@ -794,7 +798,7 @@ class CurationWindow(QMainWindow):
             if trial_id == paths.trial_id:
                 self.trial_list.setCurrentItem(item)
 
-        self.show_suite2p_iscell0 = QCheckBox("show current suite2p iscell=0 refs")
+        self.show_suite2p_iscell0 = QCheckBox("show suite2p iscell=0 refs")
         self.show_suite2p_iscell0.setChecked(False)
         self.show_suite2p_iscell0.stateChanged.connect(lambda _: self.rebuild_and_refresh())
 
@@ -1027,13 +1031,14 @@ class CurationWindow(QMainWindow):
         return np.asarray(arr, dtype=np.float32)
 
     def populate_roi_list(self) -> None:
+        selected_entries = set(self.selected_final_entries())
         current = self.selected_roi
         self.roi_table.blockSignals(True)
         self.roi_table.setRowCount(0)
         for idx in sorted(self.selected_suite2p_refs):
             row = self.add_roi_table_row("suite2p", idx, "suite2p", "final", ("suite2p", idx))
-            if current == idx:
-                self.roi_table.selectRow(row)
+            if ("suite2p", idx) in selected_entries or (not selected_entries and current == idx):
+                self.select_roi_table_row(row)
         for idx, roi in enumerate(self.added_rois):
             row = self.add_roi_table_row(
                 "manual",
@@ -1042,11 +1047,17 @@ class CurationWindow(QMainWindow):
                 "final",
                 ("manual", idx),
             )
-            if self.selected_manual_roi == idx:
-                self.roi_table.selectRow(row)
+            if ("manual", idx) in selected_entries or (not selected_entries and self.selected_manual_roi == idx):
+                self.select_roi_table_row(row)
         self.roi_table.resizeColumnsToContents()
         self.roi_table.blockSignals(False)
         self.populate_removed_roi_table()
+
+    def select_roi_table_row(self, row: int) -> None:
+        self.roi_table.selectionModel().select(
+            self.roi_table.model().index(row, 0),
+            QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows,
+        )
 
     def add_roi_table_row(self, source: str, roi_id: object, roi_type: str, state: str, data: tuple[str, int]) -> int:
         row = self.roi_table.rowCount()
@@ -1086,6 +1097,52 @@ class CurationWindow(QMainWindow):
                 manual.add(idx)
         return suite2p, manual
 
+    @staticmethod
+    def additive_selection_requested() -> bool:
+        modifiers = QApplication.keyboardModifiers()
+        return bool(
+            modifiers
+            & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier)
+        )
+
+    def suite2p_ref_visible(self, idx: int) -> bool:
+        if idx in self.selected_suite2p_refs:
+            return False
+        if (
+            idx < len(self.suite2p_ref_flags)
+            and not self.suite2p_ref_flags[idx]
+            and not self.show_suite2p_iscell0.isChecked()
+        ):
+            return False
+        return True
+
+    def valid_candidate_suite2p_selection(self) -> set[int]:
+        return {
+            int(idx)
+            for idx in self.selected_candidate_suite2p_refs
+            if 0 <= int(idx) < len(self.roi_cache) and self.suite2p_ref_visible(int(idx))
+        }
+
+    def set_candidate_suite2p_selection(self, indices: set[int], additive: bool = False) -> None:
+        valid = {
+            int(idx)
+            for idx in indices
+            if 0 <= int(idx) < len(self.roi_cache) and self.suite2p_ref_visible(int(idx))
+        }
+        if additive:
+            self.selected_candidate_suite2p_refs ^= valid
+        else:
+            self.selected_candidate_suite2p_refs = valid
+        if self.selected_candidate_suite2p_refs:
+            self.selected_roi = sorted(self.selected_candidate_suite2p_refs)[-1]
+            self.selected_manual_roi = None
+            self.roi_table.clearSelection()
+        else:
+            self.selected_roi = None
+        self.invalidate_overlay_cache()
+        self.refresh()
+        self.update_trace_plot()
+
     def select_final_entries(self, entries: list[tuple[str, int]]) -> None:
         wanted = set(entries)
         self.roi_table.blockSignals(True)
@@ -1115,6 +1172,29 @@ class CurationWindow(QMainWindow):
         else:
             self.selected_roi = None
             self.selected_manual_roi = None
+        self.selected_candidate_suite2p_refs = set()
+
+    def set_final_entry_selection(self, entry: tuple[str, int], additive: bool = False) -> None:
+        current = set(self.selected_final_entries()) if additive else set()
+        if additive and entry in current:
+            current.remove(entry)
+        else:
+            current.add(entry)
+        self.select_final_entries(sorted(current))
+        self.selected_candidate_suite2p_refs = set()
+        self.invalidate_overlay_cache()
+        self.refresh()
+        self.update_trace_plot()
+
+    def select_all_final_rois(self) -> None:
+        entries = [("suite2p", idx) for idx in sorted(self.selected_suite2p_refs)]
+        entries.extend(("manual", idx) for idx in range(len(self.added_rois)))
+        self.select_final_entries(entries)
+        self.selected_candidate_suite2p_refs = set()
+        self.invalidate_overlay_cache()
+        self.status.showMessage(f"Selected {len(entries)} final ROI(s)")
+        self.refresh()
+        self.update_trace_plot()
 
     def selected_removed_indices(self) -> list[int]:
         indices: list[int] = []
@@ -1563,6 +1643,10 @@ class CurationWindow(QMainWindow):
         self.frame_index = 0
         self.selected_roi = None
         self.selected_manual_roi = None
+        self.selected_candidate_suite2p_refs = set()
+        self.selection_box_start = None
+        self.selection_box_current = None
+        self.selection_box_target = None
         self.show_suite2p_refs = False
         self.show_suite2p.blockSignals(True)
         self.show_suite2p.setChecked(False)
@@ -1665,6 +1749,7 @@ class CurationWindow(QMainWindow):
             return
         self.selected_removed_roi = None
         self.removed_roi_table.clearSelection()
+        self.selected_candidate_suite2p_refs = set()
         kind, idx = item.data(Qt.ItemDataRole.UserRole)
         if kind == "suite2p":
             self.selected_roi = int(idx)
@@ -1683,14 +1768,27 @@ class CurationWindow(QMainWindow):
         self.selected_removed_roi = int(idx)
         self.selected_roi = None
         self.selected_manual_roi = None
+        self.selected_candidate_suite2p_refs = set()
         self.roi_table.clearSelection()
         self.status.showMessage("Selected removed ROI; Restore removed will put it back in the final ROI table")
 
     def handle_overlay_click(self, x: float, y: float, button: int) -> None:
+        if (
+            button == Qt.MouseButton.LeftButton
+            and self.show_suite2p_refs
+            and QApplication.keyboardModifiers() & Qt.KeyboardModifier.ShiftModifier
+        ):
+            self.selection_box_start = (float(x), float(y))
+            self.selection_box_current = (float(x), float(y))
+            self.selection_box_target = "suite2p_refs"
+            self.status.showMessage("Drag to box-select suite2p candidate ROIs")
+            self.refresh()
+            return
         manual_idx = self.manual_roi_at(x, y)
         if manual_idx is not None:
             self.selected_roi = None
             self.selected_manual_roi = manual_idx
+            self.selected_candidate_suite2p_refs = set()
             if button == Qt.MouseButton.RightButton:
                 manual_id = self.added_rois[manual_idx].get("manual_roi_id")
                 self.delete_manual_roi_at(manual_idx)
@@ -1709,11 +1807,10 @@ class CurationWindow(QMainWindow):
                     self.status.showMessage(f"Removed suite2p ROI {best_idx} from picked refs")
             return
         if best_idx is not None and best_dist <= 100:
-            self.selected_roi = best_idx
-            self.selected_manual_roi = None
-            self.status.showMessage(f"Viewing suite2p ROI {best_idx}. Double-click to pick/unpick.")
-            self.refresh()
-            self.update_trace_plot()
+            if button == Qt.MouseButton.LeftButton:
+                self.set_candidate_suite2p_selection({best_idx}, additive=self.additive_selection_requested())
+                count = len(self.valid_candidate_suite2p_selection())
+                self.status.showMessage(f"Selected {count} suite2p candidate ROI(s)")
             return
 
 
@@ -1725,14 +1822,62 @@ class CurationWindow(QMainWindow):
             return
         self.selected_roi = best_idx
         self.selected_manual_roi = None
+        self.selected_candidate_suite2p_refs = {best_idx} if best_idx not in self.selected_suite2p_refs else set()
         self.set_selected_state(1 if best_idx not in self.selected_suite2p_refs else 0)
         self.status.showMessage(f"Toggled suite2p ROI {best_idx}")
+
+    def suite2p_ref_entries_in_box(
+        self,
+        start: tuple[float, float],
+        end: tuple[float, float],
+    ) -> set[int]:
+        x0, y0 = start
+        x1, y1 = end
+        xmin, xmax = sorted((float(x0), float(x1)))
+        ymin, ymax = sorted((float(y0), float(y1)))
+        indices: set[int] = set()
+        for idx, roi in enumerate(self.roi_cache):
+            if not self.suite2p_ref_visible(idx):
+                continue
+            xpix = np.asarray(roi.get("xpix", []), dtype=float)
+            ypix = np.asarray(roi.get("ypix", []), dtype=float)
+            if xpix.size == 0:
+                continue
+            cx = float(np.mean(xpix))
+            cy = float(np.mean(ypix))
+            if xmin <= cx <= xmax and ymin <= cy <= ymax:
+                indices.add(int(idx))
+        return indices
+
+    def handle_overlay_drag(self, x: float, y: float, buttons: object) -> None:
+        if (
+            self.selection_box_target == "suite2p_refs"
+            and self.selection_box_start is not None
+            and (buttons & Qt.MouseButton.LeftButton)
+        ):
+            self.selection_box_current = (float(x), float(y))
+            self.refresh()
+
+    def handle_overlay_release(self, x: float, y: float, button: object) -> None:
+        if (
+            self.selection_box_target == "suite2p_refs"
+            and button == Qt.MouseButton.LeftButton
+            and self.selection_box_start is not None
+        ):
+            self.selection_box_current = (float(x), float(y))
+            indices = self.suite2p_ref_entries_in_box(self.selection_box_start, self.selection_box_current)
+            additive = self.additive_selection_requested()
+            self.selection_box_start = None
+            self.selection_box_current = None
+            self.selection_box_target = None
+            self.set_candidate_suite2p_selection(indices, additive=additive)
+            self.status.showMessage(f"Selected {len(self.valid_candidate_suite2p_selection())} suite2p candidate ROI(s)")
 
     def nearest_existing_roi(self, x: float, y: float) -> tuple[int | None, float]:
         best_idx = None
         best_dist = float("inf")
         for idx, roi in enumerate(self.roi_cache):
-            if idx < len(self.suite2p_ref_flags) and not self.suite2p_ref_flags[idx] and not self.show_suite2p_iscell0.isChecked():
+            if not self.suite2p_ref_visible(idx):
                 continue
             ypix = np.asarray(roi.get("ypix", []), dtype=float)
             xpix = np.asarray(roi.get("xpix", []), dtype=float)
@@ -1809,6 +1954,7 @@ class CurationWindow(QMainWindow):
         ):
             self.selection_box_start = (float(x), float(y))
             self.selection_box_current = (float(x), float(y))
+            self.selection_box_target = "final"
             self.status.showMessage("Drag to box-select final ROIs")
             self.refresh()
             return
@@ -1853,10 +1999,10 @@ class CurationWindow(QMainWindow):
                     self.delete_manual_roi_at(manual_idx)
                     self.status.showMessage(f"Removed manual ROI {manual_id} from final ROI set")
                 else:
-                    self.selected_roi = None
-                    self.selected_manual_roi = manual_idx
-                    self.refresh()
-                    self.update_trace_plot()
+                    self.set_final_entry_selection(
+                        ("manual", manual_idx),
+                        additive=self.additive_selection_requested(),
+                    )
                 return
             suite_idx, suite_dist = self.nearest_selected_suite2p_roi(x, y)
             if suite_idx is not None and suite_dist <= 100:
@@ -1864,15 +2010,20 @@ class CurationWindow(QMainWindow):
                     if self.remove_picked_suite2p_roi(suite_idx):
                         self.status.showMessage(f"Removed suite2p ROI {suite_idx} from picked refs")
                 else:
-                    self.selected_roi = suite_idx
-                    self.selected_manual_roi = None
-                    self.refresh()
-                    self.update_trace_plot()
+                    self.set_final_entry_selection(
+                        ("suite2p", suite_idx),
+                        additive=self.additive_selection_requested(),
+                    )
             return
 
     def handle_right_drag(self, x: float, y: float, buttons: object) -> None:
         mode = self.mode_combo.currentText()
-        if mode == "select ROI" and self.selection_box_start is not None and (buttons & Qt.MouseButton.LeftButton):
+        if (
+            mode == "select ROI"
+            and self.selection_box_target == "final"
+            and self.selection_box_start is not None
+            and (buttons & Qt.MouseButton.LeftButton)
+        ):
             self.selection_box_current = (float(x), float(y))
             self.refresh()
             return
@@ -1895,11 +2046,21 @@ class CurationWindow(QMainWindow):
 
     def handle_right_release(self, x: float, y: float, button: object) -> None:
         mode = self.mode_combo.currentText()
-        if mode == "select ROI" and button == Qt.MouseButton.LeftButton and self.selection_box_start is not None:
+        if (
+            mode == "select ROI"
+            and self.selection_box_target == "final"
+            and button == Qt.MouseButton.LeftButton
+            and self.selection_box_start is not None
+        ):
             self.selection_box_current = (float(x), float(y))
             entries = self.final_roi_entries_in_box(self.selection_box_start, self.selection_box_current)
+            if self.additive_selection_requested():
+                current = set(self.selected_final_entries())
+                current.update(entries)
+                entries = sorted(current)
             self.selection_box_start = None
             self.selection_box_current = None
+            self.selection_box_target = None
             self.select_final_entries(entries)
             self.status.showMessage(f"Selected {len(entries)} final ROI(s)")
             self.refresh()
@@ -2061,6 +2222,25 @@ class CurationWindow(QMainWindow):
         return np.asarray(np.nanmean(pixels, axis=1), dtype=np.float32)
 
     def set_selected_state(self, state: int) -> None:
+        candidate_indices = sorted(self.valid_candidate_suite2p_selection())
+        if state and candidate_indices:
+            self.push_undo("suite2p-pick-batch")
+            for roi_idx in candidate_indices:
+                self.selected_suite2p_refs.add(int(roi_idx))
+                if 0 <= roi_idx < len(self.iscell):
+                    self.iscell[roi_idx, 0] = 1.0
+                    self.iscell[roi_idx, 1] = 1.0
+            self.selected_candidate_suite2p_refs = set()
+            self.selected_roi = candidate_indices[-1]
+            self.selected_manual_roi = None
+            self.mark_manual_traces_dirty()
+            self.invalidate_overlay_cache()
+            self.dirty = True
+            self.populate_roi_list()
+            self.status.showMessage(f"Added {len(candidate_indices)} suite2p candidate ROI(s) to final set")
+            self.refresh()
+            self.update_trace_plot()
+            return
         if not state and len(self.selected_final_entries()) > 1:
             self.delete_selected()
             return
@@ -2077,24 +2257,15 @@ class CurationWindow(QMainWindow):
         was_selected = roi_idx in self.selected_suite2p_refs
         if state:
             self.selected_suite2p_refs.add(roi_idx)
-            self.removed_rois = [
-                entry
-                for entry in self.removed_rois
-                if not (entry.get("source") == "suite2p" and int(entry.get("id", -1)) == roi_idx)
-            ]
+            self.selected_candidate_suite2p_refs.discard(roi_idx)
             self.selected_removed_roi = None
             self.iscell[roi_idx, 0] = 1.0
             self.iscell[roi_idx, 1] = 1.0
         else:
             self.selected_suite2p_refs.discard(roi_idx)
             if was_selected:
-                self.removed_rois = [
-                    entry
-                    for entry in self.removed_rois
-                    if not (entry.get("source") == "suite2p" and int(entry.get("id", -1)) == roi_idx)
-                ]
-                self.removed_rois.append({"source": "suite2p", "id": roi_idx, "type": "suite2p"})
-                self.selected_removed_roi = len(self.removed_rois) - 1
+                self.selected_candidate_suite2p_refs.add(roi_idx)
+                self.selected_removed_roi = None
             self.iscell[roi_idx, 0] = 0.0
             self.iscell[roi_idx, 1] = 0.0
         self.mark_manual_traces_dirty()
@@ -2110,13 +2281,8 @@ class CurationWindow(QMainWindow):
         if push_undo:
             self.push_undo("suite2p-unpick")
         self.selected_suite2p_refs.discard(int(roi_idx))
-        self.removed_rois = [
-            entry
-            for entry in self.removed_rois
-            if not (entry.get("source") == "suite2p" and int(entry.get("id", -1)) == int(roi_idx))
-        ]
-        self.removed_rois.append({"source": "suite2p", "id": int(roi_idx), "type": "suite2p"})
-        self.selected_removed_roi = len(self.removed_rois) - 1
+        self.selected_candidate_suite2p_refs.add(int(roi_idx))
+        self.selected_removed_roi = None
         if 0 <= roi_idx < len(self.iscell):
             self.iscell[roi_idx, 0] = 0.0
             self.iscell[roi_idx, 1] = 0.0
@@ -2136,15 +2302,7 @@ class CurationWindow(QMainWindow):
         if push_undo:
             self.push_undo("delete-manual")
         removed = self.added_rois.pop(manual_idx)
-        self.removed_rois.append(
-            {
-                "source": "manual",
-                "id": int(removed.get("manual_roi_id", len(self.removed_rois) + 1)),
-                "type": str(removed.get("roi_type", "manual")),
-                "roi": copy.deepcopy(removed),
-            }
-        )
-        self.selected_removed_roi = len(self.removed_rois) - 1
+        self.selected_removed_roi = None
         if self.selected_manual_roi == manual_idx:
             self.selected_manual_roi = None
         elif self.selected_manual_roi is not None and self.selected_manual_roi > manual_idx:
@@ -2216,16 +2374,11 @@ class CurationWindow(QMainWindow):
             return
         self.push_undo("clear-suite2p-picks")
         for idx in self.selected_suite2p_refs:
-            self.removed_rois = [
-                entry
-                for entry in self.removed_rois
-                if not (entry.get("source") == "suite2p" and int(entry.get("id", -1)) == int(idx))
-            ]
-            self.removed_rois.append({"source": "suite2p", "id": int(idx), "type": "suite2p"})
             self.iscell[idx, 0] = 0.0
             self.iscell[idx, 1] = 0.0
+        self.selected_candidate_suite2p_refs |= {int(idx) for idx in self.selected_suite2p_refs}
         self.selected_suite2p_refs = set()
-        self.selected_removed_roi = len(self.removed_rois) - 1 if self.removed_rois else None
+        self.selected_removed_roi = None
         self.selected_roi = None
         self.mark_manual_traces_dirty()
         self.invalidate_overlay_cache()
@@ -2239,6 +2392,7 @@ class CurationWindow(QMainWindow):
             {
                 "label": label,
                 "iscell": self.iscell.copy(),
+                "selected_candidate_suite2p_refs": set(self.selected_candidate_suite2p_refs),
                 "selected_suite2p_refs": set(self.selected_suite2p_refs),
                 "added_rois": copy.deepcopy(self.added_rois),
                 "removed_rois": copy.deepcopy(self.removed_rois),
@@ -2258,6 +2412,7 @@ class CurationWindow(QMainWindow):
             return
         state = self.undo_stack.pop()
         self.iscell = state["iscell"]
+        self.selected_candidate_suite2p_refs = state.get("selected_candidate_suite2p_refs", set())
         self.selected_suite2p_refs = state["selected_suite2p_refs"]
         self.added_rois = state["added_rois"]
         self.removed_rois = state["removed_rois"]
@@ -2332,6 +2487,7 @@ class CurationWindow(QMainWindow):
             bool(self.show_final_rois.isChecked()),
             self.selected_roi,
             self.selected_manual_roi,
+            tuple(sorted(self.valid_candidate_suite2p_selection())),
             tuple(sorted(self.selected_suite2p_refs)),
             len(self.added_rois),
         )
@@ -2361,7 +2517,7 @@ class CurationWindow(QMainWindow):
         painter = QPainter(pixmap)
         painter.drawPixmap(0, 0, self.static_overlay_pixmap(view, pixmap.width(), pixmap.height()))
         self.paint_current_polygon(painter)
-        self.paint_selection_box(painter)
+        self.paint_selection_box(painter, view)
         painter.end()
         return pixmap
 
@@ -2373,12 +2529,7 @@ class CurationWindow(QMainWindow):
         elif not self.show_suite2p_refs:
             return
         for idx, roi in enumerate(self.roi_cache):
-            if (
-                not selected_only
-                and idx < len(self.suite2p_ref_flags)
-                and not self.suite2p_ref_flags[idx]
-                and not self.show_suite2p_iscell0.isChecked()
-            ):
+            if not selected_only and not self.suite2p_ref_visible(idx):
                 continue
             keep = idx in self.selected_suite2p_refs
             if selected_only and not keep:
@@ -2388,7 +2539,9 @@ class CurationWindow(QMainWindow):
             if ypix.size == 0:
                 continue
             color = QColor(0, 255, 80, 230) if keep else QColor(255, 128, 0, 120)
-            if self.selected_roi == idx or idx in selected_suite2p:
+            if not selected_only and idx in self.selected_candidate_suite2p_refs:
+                color = QColor(255, 220, 0, 255)
+            if selected_only and (self.selected_roi == idx or idx in selected_suite2p):
                 color = QColor(255, 220, 0, 255)
             pen = QPen(color)
             pen.setWidth(1)
@@ -2424,8 +2577,12 @@ class CurationWindow(QMainWindow):
         for p0, p1 in zip(points, points[1:]):
             painter.drawLine(p0, p1)
 
-    def paint_selection_box(self, painter: QPainter) -> None:
+    def paint_selection_box(self, painter: QPainter, view: str) -> None:
         if self.selection_box_start is None or self.selection_box_current is None:
+            return
+        if self.selection_box_target == "suite2p_refs" and view != "reference":
+            return
+        if self.selection_box_target == "final" and view != "edit":
             return
         x0, y0 = self.selection_box_start
         x1, y1 = self.selection_box_current
@@ -2456,7 +2613,7 @@ class CurationWindow(QMainWindow):
         candidates: list[tuple[str, int, float, float]] = []
         if self.show_suite2p_refs:
             for idx, roi in enumerate(self.roi_cache):
-                if idx < len(self.suite2p_ref_flags) and not self.suite2p_ref_flags[idx] and not self.show_suite2p_iscell0.isChecked():
+                if not self.suite2p_ref_visible(idx):
                     continue
                 xpix = np.asarray(roi.get("xpix", []), dtype=float)
                 ypix = np.asarray(roi.get("ypix", []), dtype=float)
@@ -2523,6 +2680,12 @@ class CurationWindow(QMainWindow):
     def keyPressEvent(self, event) -> None:  # type: ignore[override]
         key = event.key()
         modifiers = event.modifiers()
+        command_modifier = modifiers & (
+            Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier
+        )
+        if key == Qt.Key.Key_A and command_modifier:
+            self.select_all_final_rois()
+            return
         if key == Qt.Key.Key_Space:
             self.toggle_playback()
             return
@@ -2556,7 +2719,7 @@ class CurationWindow(QMainWindow):
         if key == Qt.Key.Key_S:
             self.show_suite2p.setChecked(not self.show_suite2p.isChecked())
             return
-        if key == Qt.Key.Key_Z and modifiers & Qt.KeyboardModifier.ControlModifier:
+        if key == Qt.Key.Key_Z and command_modifier:
             self.undo_last_action()
             return
         if key == Qt.Key.Key_U:
