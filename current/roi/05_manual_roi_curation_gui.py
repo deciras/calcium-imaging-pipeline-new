@@ -1123,14 +1123,44 @@ class CurationWindow(QMainWindow):
             if 0 <= int(idx) < len(self.roi_cache) and self.suite2p_ref_visible(int(idx))
         }
 
-    def set_candidate_suite2p_selection(self, indices: set[int], additive: bool = False) -> None:
+    @staticmethod
+    def rect_intersects_points(
+        x_values: np.ndarray,
+        y_values: np.ndarray,
+        xmin: float,
+        xmax: float,
+        ymin: float,
+        ymax: float,
+    ) -> bool:
+        if x_values.size == 0 or y_values.size == 0:
+            return False
+        return bool(
+            float(np.nanmax(x_values)) >= xmin
+            and float(np.nanmin(x_values)) <= xmax
+            and float(np.nanmax(y_values)) >= ymin
+            and float(np.nanmin(y_values)) <= ymax
+        )
+
+    def clear_canvas_selection(self) -> None:
+        self.selected_candidate_suite2p_refs = set()
+        self.selected_roi = None
+        self.selected_manual_roi = None
+        self.roi_table.clearSelection()
+        self.selected_removed_roi = None
+        self.invalidate_overlay_cache()
+        self.refresh()
+        self.update_trace_plot()
+
+    def set_candidate_suite2p_selection(self, indices: set[int], mode: str = "replace") -> None:
         valid = {
             int(idx)
             for idx in indices
             if 0 <= int(idx) < len(self.roi_cache) and self.suite2p_ref_visible(int(idx))
         }
-        if additive:
+        if mode == "toggle":
             self.selected_candidate_suite2p_refs ^= valid
+        elif mode == "add":
+            self.selected_candidate_suite2p_refs |= valid
         else:
             self.selected_candidate_suite2p_refs = valid
         if self.selected_candidate_suite2p_refs:
@@ -1786,19 +1816,20 @@ class CurationWindow(QMainWindow):
             return
         manual_idx = self.manual_roi_at(x, y)
         if manual_idx is not None:
-            self.selected_roi = None
-            self.selected_manual_roi = manual_idx
-            self.selected_candidate_suite2p_refs = set()
             if button == Qt.MouseButton.RightButton:
                 manual_id = self.added_rois[manual_idx].get("manual_roi_id")
                 self.delete_manual_roi_at(manual_idx)
                 self.status.showMessage(f"Removed manual ROI {manual_id} from final ROI set")
             else:
+                self.set_final_entry_selection(
+                    ("manual", manual_idx),
+                    additive=self.additive_selection_requested(),
+                )
                 self.status.showMessage(f"Selected manual ROI {self.added_rois[manual_idx]['manual_roi_id']}")
-                self.refresh()
-                self.update_trace_plot()
             return
         if not self.show_suite2p_refs:
+            if button == Qt.MouseButton.LeftButton:
+                self.clear_canvas_selection()
             return
         best_idx, best_dist = self.nearest_existing_roi(x, y)
         if button == Qt.MouseButton.RightButton:
@@ -1808,10 +1839,16 @@ class CurationWindow(QMainWindow):
             return
         if best_idx is not None and best_dist <= 100:
             if button == Qt.MouseButton.LeftButton:
-                self.set_candidate_suite2p_selection({best_idx}, additive=self.additive_selection_requested())
+                self.set_candidate_suite2p_selection(
+                    {best_idx},
+                    mode="toggle" if self.additive_selection_requested() else "replace",
+                )
                 count = len(self.valid_candidate_suite2p_selection())
                 self.status.showMessage(f"Selected {count} suite2p candidate ROI(s)")
             return
+        if button == Qt.MouseButton.LeftButton:
+            self.clear_canvas_selection()
+            self.status.showMessage("Cleared ROI selection")
 
 
     def handle_overlay_double_click(self, x: float, y: float, button: object) -> None:
@@ -1841,11 +1878,7 @@ class CurationWindow(QMainWindow):
                 continue
             xpix = np.asarray(roi.get("xpix", []), dtype=float)
             ypix = np.asarray(roi.get("ypix", []), dtype=float)
-            if xpix.size == 0:
-                continue
-            cx = float(np.mean(xpix))
-            cy = float(np.mean(ypix))
-            if xmin <= cx <= xmax and ymin <= cy <= ymax:
+            if self.rect_intersects_points(xpix, ypix, xmin, xmax, ymin, ymax):
                 indices.add(int(idx))
         return indices
 
@@ -1866,11 +1899,11 @@ class CurationWindow(QMainWindow):
         ):
             self.selection_box_current = (float(x), float(y))
             indices = self.suite2p_ref_entries_in_box(self.selection_box_start, self.selection_box_current)
-            additive = self.additive_selection_requested()
+            mode = "add" if self.additive_selection_requested() else "replace"
             self.selection_box_start = None
             self.selection_box_current = None
             self.selection_box_target = None
-            self.set_candidate_suite2p_selection(indices, additive=additive)
+            self.set_candidate_suite2p_selection(indices, mode=mode)
             self.status.showMessage(f"Selected {len(self.valid_candidate_suite2p_selection())} suite2p candidate ROI(s)")
 
     def nearest_existing_roi(self, x: float, y: float) -> tuple[int | None, float]:
@@ -1930,16 +1963,18 @@ class CurationWindow(QMainWindow):
             roi = self.roi_cache[idx]
             xpix = np.asarray(roi.get("xpix", []), dtype=float)
             ypix = np.asarray(roi.get("ypix", []), dtype=float)
-            if xpix.size == 0:
-                continue
-            cx = float(np.mean(xpix))
-            cy = float(np.mean(ypix))
-            if xmin <= cx <= xmax and ymin <= cy <= ymax:
+            if self.rect_intersects_points(xpix, ypix, xmin, xmax, ymin, ymax):
                 entries.append(("suite2p", idx))
         for idx, roi in enumerate(self.added_rois):
-            cx = float(roi.get("x_mean", 0.0))
-            cy = float(roi.get("y_mean", 0.0))
-            if xmin <= cx <= xmax and ymin <= cy <= ymax:
+            points = np.asarray(roi.get("points", []), dtype=float)
+            if points.ndim == 2 and points.shape[1] >= 2 and self.rect_intersects_points(
+                points[:, 0],
+                points[:, 1],
+                xmin,
+                xmax,
+                ymin,
+                ymax,
+            ):
                 entries.append(("manual", idx))
         return entries
 
@@ -2014,6 +2049,10 @@ class CurationWindow(QMainWindow):
                         ("suite2p", suite_idx),
                         additive=self.additive_selection_requested(),
                     )
+                return
+            if button == Qt.MouseButton.LeftButton:
+                self.clear_canvas_selection()
+                self.status.showMessage("Cleared ROI selection")
             return
 
     def handle_right_drag(self, x: float, y: float, buttons: object) -> None:
