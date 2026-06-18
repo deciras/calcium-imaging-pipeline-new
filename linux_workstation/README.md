@@ -216,6 +216,10 @@ bash linux_workstation/run_00_05_suite2p.sh "$DATA_ROOT"
 - `N_WORKERS`: 同时处理几个 trial
 - `NUM_THREADS`: 每个 worker 内部的 BLAS/OpenMP 线程数
 
+默认 `METADATA_MODE=skip`，这样已有 step 01 输出时不会重新打开 OIR
+刷新 metadata。只有需要补 metadata JSON 时再显式设置
+`METADATA_MODE=update-missing`。
+
 如果机器内存不是特别大，建议先保持 `N_WORKERS=1`，让 suite2p 在单个 trial 内多线程。
 
 Linux runner 会自动创建并使用：

@@ -28,7 +28,7 @@ cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipel
 
 python3 current/run_pipeline.py \
   --steps 06,07,08 \
-  --data-root /Users/dingyifei/Documents/calcium-imaging-pipeline-new/test_dataset \
+  --data-root /Volumes/Yifei_Ding/20260617_test \
   --action skip
 ```
 
@@ -69,7 +69,7 @@ cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipel
 
 python3 current/run_pipeline.py \
   --steps 01 \
-  --data-root /Users/dingyifei/Documents/calcium-imaging-pipeline-new/test_dataset \
+  --data-root /Volumes/Yifei_Ding/20260617_test \
   --action skip \
   --step-dry-run
 ```
@@ -79,8 +79,9 @@ python3 current/run_pipeline.py \
 推荐一个实验数据文件夹长这样：
 
 ```text
-test_dataset/
+20260617_test/
   00_original_files/
+  00_stim_logs_raw/
   01_oir_to_tif/
   02_stim_map/
   03_motion_correct/
@@ -102,6 +103,18 @@ test_dataset/
 
 每一步的结果都放在自己的文件夹里。这样比较容易检查，也不容易把原始数据和中间结果混在一起。
 
+约定两台机器都保持一致：
+
+- `00_original_files/` 只放显微镜原始数据，例如日期/session 文件夹、`.oir` 和同名原始附件。
+- `00_stim_logs_raw/` 只放刺激控制程序导出的原始参数合集，例如 `20260428_motor_rotation/` 里的 `timestamp_log_*.csv`、`stim_map_*.csv`、`experiment_config_*.json` 和 `*_angle_list.txt`。
+- `stim_logs/` 如果存在，只当作兼容旧步骤的 flat 索引或 symlink 文件夹；不要把它当作原始归档。
+
+当前测试数据集路径是：
+
+```text
+/Volumes/Yifei_Ding/20260617_test
+```
+
 ## 推荐主线
 
 现在流程分三段：
@@ -119,7 +132,7 @@ cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipel
 
 python3 current/run_pipeline.py \
   --steps premanual \
-  --data-root /Users/dingyifei/Documents/calcium-imaging-pipeline-new/test_dataset \
+  --data-root /Volumes/Yifei_Ding/20260617_test \
   --action skip
 ```
 
@@ -130,7 +143,7 @@ cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipel
 
 python3 current/run_pipeline.py \
   --steps manual \
-  --data-root /Users/dingyifei/Documents/calcium-imaging-pipeline-new/test_dataset
+  --data-root /Volumes/Yifei_Ding/20260617_test
 ```
 
 一口气跑自动后半段：
@@ -140,7 +153,7 @@ cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipel
 
 python3 current/run_pipeline.py \
   --steps postmanual \
-  --data-root /Users/dingyifei/Documents/calcium-imaging-pipeline-new/test_dataset \
+  --data-root /Volumes/Yifei_Ding/20260617_test \
   --action skip
 ```
 
@@ -155,7 +168,7 @@ cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipel
 
 python3 current/run_pipeline.py \
   --steps 06,07,08,09,10,11,12,13,14,15,16 \
-  --data-root /Users/dingyifei/Documents/calcium-imaging-pipeline-new/test_dataset \
+  --data-root /Volumes/Yifei_Ding/20260617_test \
   --action skip \
   --roi-source auto \
   --event-method robust-threshold \
@@ -390,7 +403,7 @@ cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipel
 
 python3 current/run_pipeline.py \
   --steps 15,16 \
-  --data-root /Users/dingyifei/Documents/calcium-imaging-pipeline-new/test_dataset \
+  --data-root /Volumes/Yifei_Ding/20260617_test \
   --action overwrite
 ```
 
@@ -401,7 +414,7 @@ cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipel
 
 python3 current/run_pipeline.py \
   --steps 16 \
-  --data-root /Users/dingyifei/Documents/calcium-imaging-pipeline-new/test_dataset \
+  --data-root /Volumes/Yifei_Ding/20260617_test \
   --action overwrite
 ```
 
@@ -412,11 +425,11 @@ cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipel
 
 python3 current/run_pipeline.py \
   --steps premanual \
-  --data-root /Users/dingyifei/Documents/calcium-imaging-pipeline-new/test_dataset \
+  --data-root /Volumes/Yifei_Ding/20260617_test \
   --action skip \
   --stim-export-mode both \
   --projection-mode auto \
-  --metadata-mode update-missing \
+  --metadata-mode skip \
   --analog-source auto \
   --raw-z-strategy planes \
   --sigma-px 12 \
@@ -427,6 +440,10 @@ python3 current/run_pipeline.py \
   --n-workers 1
 ```
 
+`--metadata-mode skip` keeps step 01 from reopening OIR files when TIFF outputs
+already exist. Use `--metadata-mode update-missing` only when you specifically
+want to refresh existing metadata JSON.
+
 然后打开人工 ROI 校对：
 
 ```bash
@@ -434,7 +451,7 @@ cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipel
 
 python3 current/run_pipeline.py \
   --steps manual \
-  --data-root /Users/dingyifei/Documents/calcium-imaging-pipeline-new/test_dataset
+  --data-root /Volumes/Yifei_Ding/20260617_test
 ```
 
 人工校对完成后，再跑后半段：
@@ -444,7 +461,7 @@ cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipel
 
 python3 current/run_pipeline.py \
   --steps postmanual \
-  --data-root /Users/dingyifei/Documents/calcium-imaging-pipeline-new/test_dataset \
+  --data-root /Volumes/Yifei_Ding/20260617_test \
   --action skip \
   --roi-source auto \
   --neuropil-coeff 0.7 \
@@ -527,7 +544,15 @@ docs/run_logs/
 
 ## 这个 pipeline 的使用原则
 
-最重要的原则是：
+第一原则是：
+
+```text
+Mac 和 Linux workstation 立即同步化。
+```
+
+也就是说，除了系统本身不同、绝对路径不同、少量平台入口脚本不同之外，其余内容都应该一致：代码逻辑、步骤顺序、数据目录结构、文件命名、参数含义、README 说明和运行日志都要保持同步。不要在 Mac 和 Linux 上维护两套不同规则。
+
+第二原则是：
 
 ```text
 不要不小心重跑大步骤。

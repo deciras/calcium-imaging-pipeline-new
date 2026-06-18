@@ -57,6 +57,7 @@ class PipelineStep:
     accepts_event_options: bool = False
     accepts_stim_response_options: bool = False
     accepts_angle_options: bool = False
+    accepts_trace_options: bool = False
     accepts_similarity_options: bool = False
     accepts_clustering_options: bool = False
     accepts_leiden_options: bool = False
@@ -194,6 +195,18 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
         accepts_trial_id=True,
     ),
     PipelineStep(
+        step_id="trace",
+        name="plot ROI traces",
+        script="analysis/10_trace_plots.py",
+        env="caiman",
+        accepts_data_root=True,
+        accepts_action=True,
+        accepts_step_dry_run=True,
+        accepts_output_root=True,
+        accepts_trace_options=True,
+        accepts_trial_id=True,
+    ),
+    PipelineStep(
         step_id="10",
         name="population features",
         script="analysis/10_population_features.py",
@@ -202,6 +215,7 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
         accepts_action=True,
         accepts_step_dry_run=True,
         accepts_output_root=True,
+        accepts_trial_id=True,
     ),
     PipelineStep(
         step_id="11",
@@ -224,6 +238,7 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
         accepts_step_dry_run=True,
         accepts_output_root=True,
         accepts_clustering_options=True,
+        accepts_trial_id=True,
     ),
     PipelineStep(
         step_id="13",
@@ -309,6 +324,19 @@ def normalize_env_name(env_name: str | None) -> str | None:
     return clean
 
 
+def default_stim_log_root(data_root: Path | None) -> Path | None:
+    """Prefer the shared raw stimulus-log layout, with legacy fallback."""
+    if data_root is None:
+        return None
+
+    for candidate_name in ("00_stim_logs_raw", "stim_logs"):
+        candidate = data_root / candidate_name
+        if candidate.exists() and candidate.is_dir():
+            return candidate
+
+    return None
+
+
 def parse_step_selector(raw_selector: str | None) -> set[str] | None:
     """
     Convert ``--steps`` text into lowercase selectors.
@@ -336,9 +364,12 @@ def parse_step_selector(raw_selector: str | None) -> set[str] | None:
         "basic-analysis": {"06", "07", "08", "09"},
         "basicanalysis": {"06", "07", "08", "09"},
         "basic": {"06", "07", "08", "09"},
-        "postmanual": {"06", "07", "08", "09", "10", "11", "12", "13", "14", "15", "16"},
-        "post-manual": {"06", "07", "08", "09", "10", "11", "12", "13", "14", "15", "16"},
-        "after-manual": {"06", "07", "08", "09", "10", "11", "12", "13", "14", "15", "16"},
+        "core-analysis": {"06", "08", "09", "trace", "10", "12"},
+        "core": {"06", "08", "09", "trace", "10", "12"},
+        "tuning-analysis": {"06", "08", "09", "trace", "10", "12"},
+        "postmanual": {"06", "07", "08", "09", "trace", "10", "11", "12", "13", "14", "15", "16"},
+        "post-manual": {"06", "07", "08", "09", "trace", "10", "11", "12", "13", "14", "15", "16"},
+        "after-manual": {"06", "07", "08", "09", "trace", "10", "11", "12", "13", "14", "15", "16"},
         "manual-curation": {"manual"},
     }
     expanded: set[str] = set()
@@ -462,10 +493,21 @@ def build_managed_step_args(
     event_threshold_sigma: float | None,
     baseline_sec: float | None,
     response_sec: float | None,
+    smooth_method: str | None,
+    smooth_window_sec: float | None,
+    peak_threshold_sigma: float | None,
+    peak_min_distance_sec: float | None,
     angle_period: float | None,
+    trace_response_sec: float | None,
+    trace_max_rois: int | None,
+    trace_scale: str | None,
+    y_axis_mode: str | None,
     similarity_source: str | None,
     min_corr: float | None,
     knn: int | None,
+    cluster_source: str | None,
+    linkage_method: str | None,
+    distance_metric: str | None,
     n_clusters: int | None,
     leiden_resolution: float | None,
 ) -> list[str]:
@@ -586,6 +628,10 @@ def build_managed_step_args(
         response_options = (
             ("--baseline-sec", baseline_sec),
             ("--response-sec", response_sec),
+            ("--smooth-method", smooth_method),
+            ("--smooth-window-sec", smooth_window_sec),
+            ("--peak-threshold-sigma", peak_threshold_sigma),
+            ("--peak-min-distance-sec", peak_min_distance_sec),
         )
         for option_name, option_value in response_options:
             if option_value is not None:
@@ -593,6 +639,21 @@ def build_managed_step_args(
 
     if step.accepts_angle_options and angle_period is not None:
         managed_args.extend(["--angle-period", str(angle_period)])
+
+    if step.accepts_trace_options:
+        trace_options = (
+            ("--response-sec", trace_response_sec),
+            ("--smooth-method", smooth_method),
+            ("--smooth-window-sec", smooth_window_sec),
+            ("--peak-threshold-sigma", peak_threshold_sigma),
+            ("--peak-min-distance-sec", peak_min_distance_sec),
+            ("--trace-scale", trace_scale),
+            ("--y-axis-mode", y_axis_mode),
+            ("--max-rois", trace_max_rois),
+        )
+        for option_name, option_value in trace_options:
+            if option_value is not None:
+                managed_args.extend([option_name, str(option_value)])
 
     if step.accepts_similarity_options:
         similarity_options = (
@@ -604,8 +665,16 @@ def build_managed_step_args(
             if option_value is not None:
                 managed_args.extend([option_name, str(option_value)])
 
-    if step.accepts_clustering_options and n_clusters is not None:
-        managed_args.extend(["--n-clusters", str(n_clusters)])
+    if step.accepts_clustering_options:
+        clustering_options = (
+            ("--cluster-source", cluster_source),
+            ("--linkage-method", linkage_method),
+            ("--distance-metric", distance_metric),
+            ("--n-clusters", n_clusters),
+        )
+        for option_name, option_value in clustering_options:
+            if option_value is not None:
+                managed_args.extend([option_name, str(option_value)])
 
     if step.accepts_leiden_options and leiden_resolution is not None:
         managed_args.extend(["--resolution", str(leiden_resolution)])
@@ -706,10 +775,21 @@ def resolve_steps(
     event_threshold_sigma: float | None,
     baseline_sec: float | None,
     response_sec: float | None,
+    smooth_method: str | None,
+    smooth_window_sec: float | None,
+    peak_threshold_sigma: float | None,
+    peak_min_distance_sec: float | None,
     angle_period: float | None,
+    trace_response_sec: float | None,
+    trace_max_rois: int | None,
+    trace_scale: str | None,
+    y_axis_mode: str | None,
     similarity_source: str | None,
     min_corr: float | None,
     knn: int | None,
+    cluster_source: str | None,
+    linkage_method: str | None,
+    distance_metric: str | None,
     n_clusters: int | None,
     leiden_resolution: float | None,
     passthrough_args: list[str],
@@ -784,10 +864,21 @@ def resolve_steps(
             event_threshold_sigma=event_threshold_sigma,
             baseline_sec=baseline_sec,
             response_sec=response_sec,
+            smooth_method=smooth_method,
+            smooth_window_sec=smooth_window_sec,
+            peak_threshold_sigma=peak_threshold_sigma,
+            peak_min_distance_sec=peak_min_distance_sec,
             angle_period=angle_period,
+            trace_response_sec=trace_response_sec,
+            trace_max_rois=trace_max_rois,
+            trace_scale=trace_scale,
+            y_axis_mode=y_axis_mode,
             similarity_source=similarity_source,
             min_corr=min_corr,
             knn=knn,
+            cluster_source=cluster_source,
+            linkage_method=linkage_method,
+            distance_metric=distance_metric,
             n_clusters=n_clusters,
             leiden_resolution=leiden_resolution,
         )
@@ -982,8 +1073,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--stim-log-root",
         type=Path,
         help=(
-            "Folder containing stimulus controller logs. Passed to step 02 when "
-            "provided."
+            "Folder containing stimulus controller logs. If omitted, step 02 "
+            "uses DATA_ROOT/00_stim_logs_raw when present, then falls back to "
+            "DATA_ROOT/stim_logs."
         ),
     )
     parser.add_argument(
@@ -1001,10 +1093,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--metadata-mode",
         choices=("skip", "update-missing", "refresh"),
-        default="update-missing",
+        default="skip",
         help=(
             "Step 01 metadata behavior when TIFF outputs already exist. "
-            "Default updates missing lightweight metadata without regenerating TIFFs."
+            "Default leaves existing metadata untouched so skip mode does not reopen OIR files."
         ),
     )
     parser.add_argument(
@@ -1082,10 +1174,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--baseline-sec", type=float, default=None, help="Step 08: baseline window before stimulus onset.")
     parser.add_argument("--response-sec", type=float, default=None, help="Step 08: response window after stimulus onset.")
+    parser.add_argument("--smooth-method", choices=("rolling-median", "rolling-mean", "none"), default=None, help="Steps 08/trace: smoothing method for noisy dF/F response and peak detection.")
+    parser.add_argument("--smooth-window-sec", type=float, default=None, help="Steps 08/trace: smoothing window in seconds.")
+    parser.add_argument("--peak-threshold-sigma", type=float, default=None, help="Steps 08/trace: global peak threshold in robust sigma units.")
+    parser.add_argument("--peak-min-distance-sec", type=float, default=None, help="Steps 08/trace: minimum distance between global peaks.")
     parser.add_argument("--angle-period", type=float, choices=(180.0, 360.0), default=None, help="Step 09: angular period for circular tuning.")
+    parser.add_argument("--trace-response-sec", type=float, default=None, help="Trace step: response window after stimulus onset for peak markers.")
+    parser.add_argument("--trace-max-rois", type=int, default=None, help="Trace step: maximum individual ROI trace PNGs to write; 0 means all.")
+    parser.add_argument("--trace-scale", choices=("dff", "normalized", "both"), default=None, help="Trace step: write raw dF/F plots, normalized plots, or both.")
+    parser.add_argument("--y-axis-mode", choices=("full", "robust"), default=None, help="Trace step: full dynamic y-axis per ROI, or robust clipped display.")
     parser.add_argument("--similarity-source", choices=("traces", "responses", "features"), default=None, help="Step 11: source for edge graph and heatmap.")
     parser.add_argument("--min-corr", type=float, default=None, help="Step 11: minimum similarity for graph edges.")
     parser.add_argument("--knn", type=int, default=None, help="Step 11: maximum neighbors per ROI.")
+    parser.add_argument("--cluster-source", choices=("angle", "features", "traces"), default=None, help="Step 12: data source for hierarchical clustering.")
+    parser.add_argument("--linkage-method", choices=("ward", "average", "complete"), default=None, help="Step 12: hierarchical linkage method.")
+    parser.add_argument("--distance-metric", choices=("euclidean", "correlation", "cosine"), default=None, help="Step 12: distance metric.")
     parser.add_argument("--n-clusters", type=int, default=None, help="Step 12: number of hierarchical clusters.")
     parser.add_argument("--leiden-resolution", type=float, default=None, help="Step 13: Leiden resolution parameter.")
     parser.add_argument(
@@ -1147,7 +1250,11 @@ def main(argv: list[str] | None = None) -> int:
     passthrough_args = split_passthrough_args(args.step_args)
     data_root = args.data_root.expanduser().resolve() if args.data_root else None
     output_root = args.output_root.expanduser().resolve() if args.output_root else None
-    stim_log_root = args.stim_log_root.expanduser().resolve() if args.stim_log_root else None
+    stim_log_root = (
+        args.stim_log_root.expanduser().resolve()
+        if args.stim_log_root
+        else default_stim_log_root(data_root)
+    )
     try:
         check_conda_available(selected_steps, args.conda_bin)
         resolved_steps = resolve_steps(
@@ -1199,10 +1306,21 @@ def main(argv: list[str] | None = None) -> int:
             event_threshold_sigma=args.event_threshold_sigma,
             baseline_sec=args.baseline_sec,
             response_sec=args.response_sec,
+            smooth_method=args.smooth_method,
+            smooth_window_sec=args.smooth_window_sec,
+            peak_threshold_sigma=args.peak_threshold_sigma,
+            peak_min_distance_sec=args.peak_min_distance_sec,
             angle_period=args.angle_period,
+            trace_response_sec=args.trace_response_sec,
+            trace_max_rois=args.trace_max_rois,
+            trace_scale=args.trace_scale,
+            y_axis_mode=args.y_axis_mode,
             similarity_source=args.similarity_source,
             min_corr=args.min_corr,
             knn=args.knn,
+            cluster_source=args.cluster_source,
+            linkage_method=args.linkage_method,
+            distance_metric=args.distance_metric,
             n_clusters=args.n_clusters,
             leiden_resolution=args.leiden_resolution,
             passthrough_args=passthrough_args,
