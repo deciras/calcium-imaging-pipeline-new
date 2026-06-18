@@ -7,6 +7,15 @@ PySide6 installed, usually the same environment used by the manual ROI GUI:
 conda run -n caiman python current/pipeline_dashboard_gui.py
 ```
 
+On the Linux workstation, use the dedicated lightweight dashboard environment:
+
+```bash
+bash linux_workstation/launch_pipeline_dashboard.sh "$DATA_ROOT"
+```
+
+That launcher defaults to `DASHBOARD_ENV=dashboard_gui` and
+`CONDA_BIN=/home/yifei/anaconda3/bin/conda`.
+
 The dashboard is a controller for `current/run_pipeline.py`. Heavy processing
 still runs in a child process, so the dashboard window remains responsive while
 Fiji, CaImAn, suite2p, or post-manual analysis steps run.

@@ -237,6 +237,37 @@ PIPELINE_CACHE_DIR=/tmp/calcium_pipeline_cache \
 bash linux_workstation/run_00_05_suite2p.sh "$DATA_ROOT"
 ```
 
+## 打开 dashboard GUI
+
+工作站上单独准备了轻量 GUI 环境 `dashboard_gui`，用于打开总控 dashboard。这个环境只负责显示 dashboard；真正跑 00-05、manual、06-16 时，dashboard 仍然会按步骤调用对应的 conda 环境。
+
+```bash
+bash linux_workstation/launch_pipeline_dashboard.sh "$DATA_ROOT"
+```
+
+也可以不传数据目录，打开后在窗口里选择：
+
+```bash
+bash linux_workstation/launch_pipeline_dashboard.sh
+```
+
+默认设置：
+
+- conda: `/home/yifei/anaconda3/bin/conda`
+- dashboard env: `dashboard_gui`
+- Fiji: `/home/yifei/Fiji/fiji-linux-x64`
+- Fiji memory: `64G`
+
+如果换了工作站或环境名，可以临时覆盖：
+
+```bash
+CONDA_BIN=/path/to/conda \
+DASHBOARD_ENV=dashboard_gui \
+bash linux_workstation/launch_pipeline_dashboard.sh "$DATA_ROOT"
+```
+
+注意：dashboard 是图形界面。如果你是纯 SSH 登录，需要工作站本身有桌面/VNC，或者用 X11 转发；否则可以继续在本地 Mac 打开 dashboard，工作站只负责跑重任务。
+
 ## 单独打开 manual GUI
 
 GUI 不属于 overnight 00-05。前半段跑完后，如果你想在 Linux 上看 ROI，可以单独启动：
