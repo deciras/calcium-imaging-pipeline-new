@@ -36,8 +36,6 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QLabel,
-    QListWidget,
-    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -210,6 +208,17 @@ def discover_trial_ids(data_root: Path, movie_kind: str) -> list[str]:
                 seen.add(trial_id)
                 trial_ids.append(trial_id)
     return trial_ids
+
+
+def trial_display_label(data_root: Path, movie_kind: str, trial_id: str) -> str:
+    try:
+        movie_path = find_movie_path(data_root, trial_id, movie_kind)
+    except Exception:
+        return trial_id
+    rel_parent = trial_rel_parent(movie_path.parent, step_root_for_movie_kind(data_root, movie_kind))
+    if str(rel_parent) in ("", "."):
+        return trial_id
+    return f"{rel_parent} / {trial_id}"
 
 
 def load_iscell(paths: TrialPaths, n_roi: int) -> np.ndarray:
@@ -829,13 +838,16 @@ class CurationWindow(QMainWindow):
             self.movie_kind_combo.setCurrentIndex(combo_index)
         self.movie_kind_combo.currentIndexChanged.connect(self.change_movie_kind)
 
-        self.trial_list = QListWidget()
-        self.trial_list.setMaximumHeight(130)
-        for trial_id in self.trial_ids:
-            item = QListWidgetItem(trial_id)
-            self.trial_list.addItem(item)
-            if trial_id == paths.trial_id:
-                self.trial_list.setCurrentItem(item)
+        self.date_combo = QComboBox()
+        self.date_combo.setMaxVisibleItems(20)
+        self.date_combo.currentIndexChanged.connect(self.refresh_trial_combo_for_date)
+
+        self.trial_combo = QComboBox()
+        self.trial_combo.setEditable(True)
+        self.trial_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.trial_combo.setMaxVisibleItems(30)
+        self.trial_combo.setMinimumContentsLength(28)
+        self.refresh_trial_selectors(paths.trial_id)
 
         self.show_suite2p_iscell0 = QCheckBox("show suite2p iscell=0 refs")
         self.show_suite2p_iscell0.setChecked(False)
@@ -890,8 +902,10 @@ class CurationWindow(QMainWindow):
         controls = QVBoxLayout()
         controls.addWidget(QLabel("Movie source"))
         controls.addWidget(self.movie_kind_combo)
-        controls.addWidget(QLabel("Files"))
-        controls.addWidget(self.trial_list)
+        controls.addWidget(QLabel("Date"))
+        controls.addWidget(self.date_combo)
+        controls.addWidget(QLabel("Trial"))
+        controls.addWidget(self.trial_combo)
         controls.addWidget(load_trial_btn)
         controls.addWidget(next_trial_btn)
         controls.addSpacing(10)
@@ -1312,16 +1326,65 @@ class CurationWindow(QMainWindow):
 
     def refresh_trial_list(self, selected_trial_id: str | None = None) -> None:
         self.trial_ids = discover_trial_ids(self.data_root, self.movie_kind)
-        self.trial_list.blockSignals(True)
-        self.trial_list.clear()
-        for trial_id in self.trial_ids:
-            item = QListWidgetItem(trial_id)
-            self.trial_list.addItem(item)
+        self.refresh_trial_selectors(selected_trial_id)
+
+    def trial_date_label(self, trial_id: str) -> str:
+        try:
+            movie_path = find_movie_path(self.data_root, trial_id, self.movie_kind)
+        except Exception:
+            return "no date"
+        rel_parent = trial_rel_parent(movie_path.parent, step_root_for_movie_kind(self.data_root, self.movie_kind))
+        return "no date" if str(rel_parent) in ("", ".") else str(rel_parent)
+
+    def refresh_trial_selectors(self, selected_trial_id: str | None = None) -> None:
+        selected_date = self.trial_date_label(selected_trial_id) if selected_trial_id else "__all__"
+        dates = sorted({self.trial_date_label(trial_id) for trial_id in self.trial_ids})
+        self.date_combo.blockSignals(True)
+        self.date_combo.clear()
+        self.date_combo.addItem("all dates", "__all__")
+        for date_label in dates:
+            self.date_combo.addItem(date_label, date_label)
+        date_index = self.date_combo.findData(selected_date)
+        self.date_combo.setCurrentIndex(date_index if date_index >= 0 else 0)
+        self.date_combo.blockSignals(False)
+        self.refresh_trial_combo_for_date(selected_trial_id=selected_trial_id)
+
+    def refresh_trial_combo_for_date(self, *_args, selected_trial_id: str | None = None) -> None:
+        date_filter = self.date_combo.currentData()
+        show_dates = date_filter in (None, "__all__")
+        trial_ids = [
+            trial_id
+            for trial_id in self.trial_ids
+            if show_dates or self.trial_date_label(trial_id) == str(date_filter)
+        ]
+        self.trial_combo.blockSignals(True)
+        self.trial_combo.clear()
+        for trial_id in trial_ids:
+            label = trial_display_label(self.data_root, self.movie_kind, trial_id) if show_dates else trial_id
+            self.trial_combo.addItem(label, trial_id)
             if selected_trial_id == trial_id:
-                self.trial_list.setCurrentItem(item)
-        if self.trial_list.currentRow() < 0 and self.trial_list.count() > 0:
-            self.trial_list.setCurrentRow(0)
-        self.trial_list.blockSignals(False)
+                self.trial_combo.setCurrentText(label)
+        if not self.trial_combo.currentText() and self.trial_combo.count() > 0:
+            self.trial_combo.setCurrentIndex(0)
+        self.trial_combo.blockSignals(False)
+
+    def selected_trial_combo_id(self) -> str:
+        data = self.trial_combo.currentData()
+        if data:
+            return str(data)
+        text = self.trial_combo.currentText().strip()
+        if text in self.trial_ids:
+            return text
+        if " / " in text:
+            candidate = text.rsplit(" / ", 1)[-1].strip()
+            if candidate in self.trial_ids:
+                return candidate
+        for row in range(self.trial_combo.count()):
+            if self.trial_combo.itemText(row) == text:
+                item_data = self.trial_combo.itemData(row)
+                if item_data:
+                    return str(item_data)
+        return text
 
     def change_movie_kind(self) -> None:
         new_kind = str(self.movie_kind_combo.currentData())
@@ -1662,21 +1725,30 @@ class CurationWindow(QMainWindow):
         self.close()
 
     def load_selected_trial(self) -> None:
-        item = self.trial_list.currentItem()
-        if item is None:
+        trial_id = self.selected_trial_combo_id()
+        if not trial_id:
             return
-        self.load_trial_id(item.text())
+        self.load_trial_id(trial_id)
 
     def load_next_trial(self) -> None:
-        if not self.trial_ids:
+        date_filter = self.date_combo.currentData()
+        trial_ids = [
+            trial_id
+            for trial_id in self.trial_ids
+            if date_filter in (None, "__all__") or self.trial_date_label(trial_id) == str(date_filter)
+        ]
+        if not trial_ids:
             return
         try:
-            current_idx = self.trial_ids.index(self.paths.trial_id)
+            current_idx = trial_ids.index(self.paths.trial_id)
         except ValueError:
             current_idx = -1
-        next_idx = (current_idx + 1) % len(self.trial_ids)
-        self.trial_list.setCurrentRow(next_idx)
-        self.load_trial_id(self.trial_ids[next_idx])
+        next_idx = (current_idx + 1) % len(trial_ids)
+        next_trial_id = trial_ids[next_idx]
+        show_dates = date_filter in (None, "__all__")
+        label = trial_display_label(self.data_root, self.movie_kind, next_trial_id) if show_dates else next_trial_id
+        self.trial_combo.setCurrentText(label)
+        self.load_trial_id(next_trial_id)
 
     def load_trial_id(self, trial_id: str, already_checked: bool = False) -> None:
         if trial_id == self.paths.trial_id:
