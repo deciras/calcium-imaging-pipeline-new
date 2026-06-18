@@ -13,7 +13,7 @@ cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipel
 
 python3 current/run_pipeline.py \
   --steps manual \
-  --data-root /Users/dingyifei/Documents/calcium-imaging-pipeline-new/test_dataset \
+  --data-root /Volumes/Yifei_Ding/20260617_test \
   --trial-id 20260428_Euprymna_retina2_25x \
   --movie-kind corrected
 ```
@@ -21,6 +21,11 @@ python3 current/run_pipeline.py \
 Linux 工作站上也用同一套命令。只需要把 `--data-root` 改成 Linux 上真实数据的位置。
 
 如果不写 `--data-root`，会弹出窗口让你选择数据根目录。
+
+GUI 会在各步骤输出文件夹下递归搜索 movie 和 suite2p 结果，所以同时支持本地测试集这种一层结构：
+`03_motion_correct/<trial>/...`，也支持工作站整理后的日期结构：
+`03_motion_correct/<date>/<trial>/...`。manual ROI 保存时也会保留相同的相对层级，例如：
+`05e_roi_manual_curation/<date>/<trial>/...`，这样后续 06 可以自动接上。
 
 ## 窗口怎么看
 

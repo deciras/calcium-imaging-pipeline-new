@@ -58,6 +58,7 @@ STEP_NAME = "05e_roi_manual_curation"
 @dataclass
 class TrialPaths:
     trial_id: str
+    rel_parent: Path
     suite2p_dir: Path | None
     plane0_dir: Path | None
     stat_path: Path | None
@@ -66,6 +67,35 @@ class TrialPaths:
     fneu_path: Path | None
     movie_path: Path
     output_dir: Path
+
+
+MOVIE_PATTERNS = {
+    "raw": "*_Max_Proj.tif",
+    "corrected": "*_corrected_movie.tif",
+    "spatial-highpass": "*_spatial_highpass_movie.tif",
+}
+
+
+def step_root_for_movie_kind(data_root: Path, movie_kind: str) -> Path:
+    if movie_kind == "raw":
+        return data_root / "01_oir_to_tif"
+    if movie_kind == "spatial-highpass":
+        return data_root / "04_spatial_highpass"
+    return data_root / "03_motion_correct"
+
+
+def trial_rel_parent(trial_dir: Path, step_root: Path) -> Path:
+    try:
+        rel = trial_dir.parent.relative_to(step_root)
+    except ValueError:
+        return Path()
+    return Path() if str(rel) == "." else rel
+
+
+def manual_output_dir(data_root: Path, rel_parent: Path, trial_id: str) -> Path:
+    if str(rel_parent) in ("", "."):
+        return data_root / STEP_NAME / trial_id
+    return data_root / STEP_NAME / rel_parent / trial_id
 
 
 def find_trial_paths(data_root: Path, trial_id: str | None, movie_kind: str) -> TrialPaths:
@@ -83,23 +113,31 @@ def find_trial_paths(data_root: Path, trial_id: str | None, movie_kind: str) -> 
         plane0_dir = stat_path.parent
         suite2p_dir = plane0_dir.parent.parent
         trial_id = suite2p_dir.name
+        rel_parent = trial_rel_parent(suite2p_dir, suite2p_root)
         iscell_path = plane0_dir / "iscell.npy"
         f_path = plane0_dir / "F.npy"
         fneu_path = plane0_dir / "Fneu.npy"
     else:
         if trial_id is None:
-            raise FileNotFoundError(
-                "No suite2p stat.npy found. Please pass --trial-id so the GUI can open a movie-only trial."
-            )
+            trial_ids = discover_trial_ids(data_root, movie_kind)
+            if not trial_ids:
+                raise FileNotFoundError(
+                    "No suite2p stat.npy or movie was found. Please pass --trial-id so the GUI can open a movie-only trial."
+                )
+            trial_id = trial_ids[0]
         plane0_dir = None
         suite2p_dir = None
+        rel_parent = Path()
         iscell_path = None
         f_path = None
         fneu_path = None
 
     movie_path = find_movie_path(data_root, trial_id, movie_kind)
+    if suite2p_dir is None:
+        rel_parent = trial_rel_parent(movie_path.parent, step_root_for_movie_kind(data_root, movie_kind))
     return TrialPaths(
         trial_id=trial_id,
+        rel_parent=rel_parent,
         suite2p_dir=suite2p_dir,
         plane0_dir=plane0_dir,
         stat_path=stat_path,
@@ -107,24 +145,25 @@ def find_trial_paths(data_root: Path, trial_id: str | None, movie_kind: str) -> 
         f_path=f_path,
         fneu_path=fneu_path,
         movie_path=movie_path,
-        output_dir=data_root / STEP_NAME / trial_id,
+        output_dir=manual_output_dir(data_root, rel_parent, trial_id),
     )
 
 
 def find_movie_path(data_root: Path, trial_id: str, movie_kind: str) -> Path:
-    if movie_kind == "raw":
-        root = data_root / "01_oir_to_tif" / trial_id
-        matches = sorted(root.glob("*_Max_Proj.tif"))
-        if matches:
-            return matches[0]
+    root = step_root_for_movie_kind(data_root, movie_kind)
+    pattern = MOVIE_PATTERNS[movie_kind]
+    matches = sorted((root / trial_id).glob(pattern))
+    if matches:
+        return matches[0]
+    matches = sorted(path for path in root.rglob(pattern) if path.parent.name == trial_id)
+    if matches:
+        return matches[0]
     if movie_kind == "spatial-highpass":
-        root = data_root / "04_spatial_highpass" / trial_id
-        matches = sorted(root.glob("*_spatial_highpass_movie.tif"))
+        fallback = step_root_for_movie_kind(data_root, "corrected")
+        matches = sorted((fallback / trial_id).glob(MOVIE_PATTERNS["corrected"]))
         if matches:
             return matches[0]
-    if movie_kind in {"corrected", "spatial-highpass"}:
-        root = data_root / "03_motion_correct" / trial_id
-        matches = sorted(root.glob("*_corrected_movie.tif"))
+        matches = sorted(path for path in fallback.rglob(MOVIE_PATTERNS["corrected"]) if path.parent.name == trial_id)
         if matches:
             return matches[0]
     raise FileNotFoundError(f"No movie found for {trial_id} using movie_kind={movie_kind}")
@@ -165,7 +204,7 @@ def discover_trial_ids(data_root: Path, movie_kind: str) -> list[str]:
             pattern = "*_spatial_highpass_movie.tif"
         else:
             pattern = "*_corrected_movie.tif"
-        for movie in sorted(root.glob(f"*/{pattern}")):
+        for movie in sorted(root.rglob(pattern)):
             trial_id = movie.parent.name
             if trial_id not in seen:
                 seen.add(trial_id)
