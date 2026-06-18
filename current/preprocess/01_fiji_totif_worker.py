@@ -123,7 +123,7 @@ def normalize_projection_mode(mode):
 def normalize_metadata_mode(mode):
     mode = _as_str(mode).strip().lower()
     if mode == "":
-        mode = "update-missing"
+        mode = "skip"
     aliases = {
         "update": "update-missing",
         "missing": "update-missing",
@@ -132,8 +132,8 @@ def normalize_metadata_mode(mode):
     }
     mode = aliases.get(mode, mode)
     if mode not in VALID_METADATA_MODES:
-        print("[WARNING] Unknown metadataMode='{}'; using 'update-missing'.".format(mode))
-        mode = "update-missing"
+        print("[WARNING] Unknown metadataMode='{}'; using 'skip'.".format(mode))
+        mode = "skip"
     return mode
 
 
@@ -240,6 +240,17 @@ def find_existing_file(output_dir_path, title, suffixes):
     return None
 
 
+def output_name_exists(output_dir_path, title, suffixes):
+    try:
+        names = set(os.listdir(output_dir_path))
+    except Exception:
+        return False
+    for suffix in suffixes:
+        if title + suffix in names:
+            return True
+    return False
+
+
 def raw_stim_series_dir(output_dir_path, title):
     return os.path.join(output_dir_path, title + "_Stim_Analog_Raw")
 
@@ -288,9 +299,9 @@ def is_step01_done(output_dir_path, title, stim_export_mode):
     OIR, which defeats the purpose of skip.
     """
     meta = find_existing_file(output_dir_path, title, ["_metadata.json"])
-    max_proj = find_existing_file(output_dir_path, title, ["_Max_Proj.tif", "_Max_Proj.tiff"])
+    max_proj_exists = output_name_exists(output_dir_path, title, ["_Max_Proj.tif", "_Max_Proj.tiff"])
 
-    if meta is None or max_proj is None:
+    if meta is None or not max_proj_exists:
         return False
 
     if STRICT_REQUIRE_STIM_FOR_SKIP:
@@ -946,6 +957,14 @@ def main():
             target_dir = infer_output_target(root_path, output_root_path, root, f)
 
             try:
+                if should_skip_or_prepare(file_path, target_dir, existing_mode, metadata_mode, stim_export_mode):
+                    title_guess = sanitize_title_from_filename(file_path)
+                    metadata_path = find_existing_file(target_dir, title_guess, ["_metadata.json"])
+                    if metadata_path is not None and metadata_has_acquisition_start(metadata_path):
+                        n_metadata_updated += 1
+                    n_skipped += 1
+                    continue
+
                 valid_group, group_status = validate_oir_file_group(file_path)
                 if not valid_group:
                     print("[WARNING] Incomplete Olympus OIR file group skipped: {}".format(file_path))
@@ -953,14 +972,6 @@ def main():
                     print("[WARNING] Cleaning any Step 01 outputs for incomplete trial: " + target_dir)
                     clean_step01_outputs(target_dir)
                     n_invalid += 1
-                    n_skipped += 1
-                    continue
-
-                if should_skip_or_prepare(file_path, target_dir, existing_mode, metadata_mode, stim_export_mode):
-                    title_guess = sanitize_title_from_filename(file_path)
-                    metadata_path = find_existing_file(target_dir, title_guess, ["_metadata.json"])
-                    if metadata_path is not None and metadata_has_acquisition_start(metadata_path):
-                        n_metadata_updated += 1
                     n_skipped += 1
                     continue
 
