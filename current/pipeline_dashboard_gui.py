@@ -97,7 +97,7 @@ class PipelineDashboard(QMainWindow):
         self.update_button_state(False)
 
     def _build_ui(self) -> None:
-        self.data_root_edit = QLineEdit(os.environ.get("DATA_ROOT", ""))
+        self.data_root_edit = QLineEdit(self.default_data_root())
         browse_data_btn = QPushButton("Browse")
         browse_data_btn.clicked.connect(self.browse_data_root)
 
@@ -242,6 +242,19 @@ class PipelineDashboard(QMainWindow):
         spin.setValue(value)
         return spin
 
+    def default_data_root(self) -> str:
+        configured = os.environ.get("DATA_ROOT", "").strip()
+        if configured:
+            return configured
+        return self.settings.value("last_data_root", "", type=str)
+
+    def save_data_root_default(self) -> None:
+        data_root = self.data_root_edit.text().strip()
+        if not data_root:
+            return
+        self.settings.setValue("last_data_root", data_root)
+        self.settings.sync()
+
     def default_fiji_path(self) -> str:
         saved = self.settings.value("fiji_path", "", type=str)
         if saved:
@@ -265,6 +278,7 @@ class PipelineDashboard(QMainWindow):
         path = QFileDialog.getExistingDirectory(self, "Select data root", self.data_root_edit.text() or str(Path.home()))
         if path:
             self.data_root_edit.setText(path)
+            self.save_data_root_default()
 
     def browse_fiji_bin(self) -> None:
         current = self.fiji_bin_edit.text() or str(Path.home())
@@ -388,6 +402,7 @@ class PipelineDashboard(QMainWindow):
         except Exception as exc:
             QMessageBox.warning(self, "Pipeline command", str(exc))
             return
+        self.save_data_root_default()
         self.reset_step_states()
         self.append_log(f"$ {subprocess_like_command([program, *args])}\n")
         self.process = QProcess(self)
@@ -411,6 +426,7 @@ class PipelineDashboard(QMainWindow):
         except Exception as exc:
             QMessageBox.warning(self, "Manual GUI", str(exc))
             return
+        self.save_data_root_default()
         ok = QProcess.startDetached(program, args, str(self.current_dir))
         if ok:
             self.append_log(f"$ {subprocess_like_command([program, *args])}\n")

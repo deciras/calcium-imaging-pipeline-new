@@ -30,6 +30,9 @@ Typical use:
 5. Use `Start` to run the selected steps and monitor the live log.
 6. Use `Stop` to terminate the child process.
 
+The dashboard remembers the last `Data root` used by `Plan`, `Start`, or
+`Open manual GUI`, so the next launch opens at the previous working location.
+
 The `Open manual GUI` button launches the existing manual ROI curation GUI via
 the existing `manual` pipeline step. The manual GUI implementation and behavior
 remain separate from this dashboard.
