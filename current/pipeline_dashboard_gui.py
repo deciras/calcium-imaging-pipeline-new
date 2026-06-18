@@ -12,7 +12,9 @@ from __future__ import annotations
 import os
 import platform
 import re
+import signal
 import shlex
+import subprocess
 import sys
 from pathlib import Path
 
@@ -420,10 +422,50 @@ class PipelineDashboard(QMainWindow):
         if self.process is None or self.process.state() == QProcess.ProcessState.NotRunning:
             return
         self.append_log("\nStopping pipeline process...\n")
-        self.process.terminate()
+        root_pid = int(self.process.processId())
+        self.terminate_process_tree(root_pid, signal.SIGTERM)
         if not self.process.waitForFinished(5000):
-            self.append_log("Process did not terminate; killing it.\n")
+            self.append_log("Process tree did not terminate; killing it.\n")
+            self.terminate_process_tree(root_pid, signal.SIGKILL)
             self.process.kill()
+
+    @staticmethod
+    def child_pids(parent_pid: int) -> list[int]:
+        try:
+            output = subprocess.check_output(["ps", "-axo", "pid=,ppid="], text=True)
+        except Exception:
+            return []
+        children: list[int] = []
+        for line in output.splitlines():
+            fields = line.split()
+            if len(fields) != 2:
+                continue
+            pid, ppid = (int(fields[0]), int(fields[1]))
+            if ppid == parent_pid:
+                children.append(pid)
+        return children
+
+    @classmethod
+    def descendant_pids(cls, root_pid: int) -> list[int]:
+        descendants: list[int] = []
+        stack = cls.child_pids(root_pid)
+        while stack:
+            pid = stack.pop()
+            descendants.append(pid)
+            stack.extend(cls.child_pids(pid))
+        return descendants
+
+    @classmethod
+    def terminate_process_tree(cls, root_pid: int, sig: signal.Signals) -> None:
+        for pid in reversed(cls.descendant_pids(root_pid)):
+            try:
+                os.kill(pid, sig)
+            except OSError:
+                pass
+        try:
+            os.kill(root_pid, sig)
+        except OSError:
+            pass
 
     def clear_log(self) -> None:
         self.log_view.clear()
