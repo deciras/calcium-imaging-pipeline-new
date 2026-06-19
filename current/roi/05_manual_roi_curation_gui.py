@@ -221,6 +221,77 @@ def trial_display_label(data_root: Path, movie_kind: str, trial_id: str) -> str:
     return f"{rel_parent} / {trial_id}"
 
 
+def find_metadata_path(data_root: Path, trial_id: str, rel_parent: Path) -> Path | None:
+    step_roots = (
+        data_root / "03_motion_correct",
+        data_root / "04_spatial_highpass",
+        data_root / "01_oir_to_tif",
+        data_root / "05_suite2p_roi_detection",
+    )
+    relative_trial = rel_parent / trial_id if str(rel_parent) not in ("", ".") else Path(trial_id)
+    for root in step_roots:
+        trial_dir = root / relative_trial
+        matches = sorted(trial_dir.glob("*_metadata.json"))
+        if matches:
+            return matches[0]
+    for root in step_roots:
+        if not root.exists():
+            continue
+        matches = sorted(path for path in root.rglob("*_metadata.json") if path.parent.name == trial_id)
+        if matches:
+            return matches[0]
+    return None
+
+
+def nested_value(data: dict, keys: tuple[str, ...]) -> object | None:
+    current: object = data
+    for key in keys:
+        if not isinstance(current, dict) or key not in current:
+            return None
+        current = current[key]
+    return current
+
+
+def positive_float(value: object) -> float | None:
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    return out if np.isfinite(out) and out > 0 else None
+
+
+def fps_from_metadata_path(metadata_path: Path | None, default_fps: float = 2.0) -> tuple[float, str]:
+    if metadata_path is None or not metadata_path.exists():
+        return float(default_fps), "metadata missing"
+    try:
+        with metadata_path.open("r", encoding="utf-8") as handle:
+            meta = json.load(handle)
+    except Exception:
+        return float(default_fps), "metadata unreadable"
+    candidates = (
+        nested_value(meta, ("temporal_calibration", "fps")),
+        nested_value(meta, ("imaging", "fps")),
+        nested_value(meta, ("acquisition", "fps")),
+        meta.get("fps") if isinstance(meta, dict) else None,
+        meta.get("frame_rate") if isinstance(meta, dict) else None,
+    )
+    for candidate in candidates:
+        fps = positive_float(candidate)
+        if fps is not None:
+            return fps, str(metadata_path)
+    intervals = (
+        nested_value(meta, ("temporal_calibration", "frame_interval_sec")),
+        nested_value(meta, ("temporal_calibration", "frame_interval")),
+        meta.get("frame_interval_sec") if isinstance(meta, dict) else None,
+        meta.get("frame_interval") if isinstance(meta, dict) else None,
+    )
+    for candidate in intervals:
+        interval = positive_float(candidate)
+        if interval is not None:
+            return 1.0 / interval, str(metadata_path)
+    return float(default_fps), "metadata fps missing"
+
+
 def load_iscell(paths: TrialPaths, n_roi: int) -> np.ndarray:
     if paths.iscell_path is None:
         out = np.zeros((n_roi, 2), dtype=np.float32)
@@ -708,6 +779,9 @@ class CurationWindow(QMainWindow):
         self.movie = movie_as_tyx(paths.movie_path)
         self.trace_movie_path = self.default_trace_movie_path(paths)
         self.trace_movie = movie_as_tyx(self.trace_movie_path)
+        self.acquisition_fps = 2.0
+        self.acquisition_fps_source = ""
+        self.refresh_acquisition_fps(paths)
         self.frame_index = 0
         self.selected_roi: int | None = None
         self.selected_manual_roi: int | None = None
@@ -768,12 +842,29 @@ class CurationWindow(QMainWindow):
         self.play_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.play_btn.clicked.connect(self.toggle_playback)
 
-        self.fps_spin = QSpinBox()
-        self.fps_spin.setRange(1, 120)
-        self.fps_spin.setValue(10)
+        self.playback_mode_combo = QComboBox()
+        self.playback_mode_combo.addItem("real-time x", "real-time")
+        self.playback_mode_combo.addItem("display fps", "fps")
+        self.playback_mode_combo.currentIndexChanged.connect(self.update_playback_controls)
+
+        self.speed_spin = QDoubleSpinBox()
+        self.speed_spin.setRange(0.05, 100.0)
+        self.speed_spin.setDecimals(2)
+        self.speed_spin.setSingleStep(0.25)
+        self.speed_spin.setValue(1.0)
+        self.speed_spin.setSuffix(" x")
+        self.speed_spin.valueChanged.connect(self.update_play_timer_interval)
+
+        self.fps_spin = QDoubleSpinBox()
+        self.fps_spin.setRange(0.1, 240.0)
+        self.fps_spin.setDecimals(1)
+        self.fps_spin.setSingleStep(1.0)
+        self.fps_spin.setValue(10.0)
         self.fps_spin.setSuffix(" fps")
         self.fps_spin.valueChanged.connect(self.update_play_timer_interval)
-        self.update_play_timer_interval()
+
+        self.playback_info_label = QLabel("")
+        self.update_playback_controls()
 
         self.black_spin = QDoubleSpinBox()
         self.black_spin.setRange(0.0, 99.8)
@@ -968,7 +1059,10 @@ class CurationWindow(QMainWindow):
         slider_layout = QHBoxLayout()
         slider_layout.addWidget(QLabel("frame"))
         slider_layout.addWidget(self.play_btn)
+        slider_layout.addWidget(self.playback_mode_combo)
+        slider_layout.addWidget(self.speed_spin)
         slider_layout.addWidget(self.fps_spin)
+        slider_layout.addWidget(self.playback_info_label)
         slider_layout.addWidget(self.frame_slider)
         slider_layout.addWidget(self.frame_spin)
 
@@ -1438,6 +1532,7 @@ class CurationWindow(QMainWindow):
         self.movie_kind = new_kind
         self.paths = paths
         self.movie = movie_as_tyx(paths.movie_path)
+        self.refresh_acquisition_fps(paths)
         self.frame_index = min(self.frame_index, max(self.movie.shape[0] - 1, 0))
         self.frame_slider.setMaximum(max(self.movie.shape[0] - 1, 0))
         self.frame_spin.setMaximum(max(self.movie.shape[0] - 1, 0))
@@ -1781,6 +1876,7 @@ class CurationWindow(QMainWindow):
         self.suite2p_ref_flags = np.zeros((0,), dtype=bool)
         self.movie = movie_as_tyx(paths.movie_path)
         self.load_trace_movie_for_trial(paths)
+        self.refresh_acquisition_fps(paths)
         self.frame_index = 0
         self.selected_roi = None
         self.selected_manual_roi = None
@@ -1813,9 +1909,30 @@ class CurationWindow(QMainWindow):
         if was_playing:
             self.start_playback()
 
+    def refresh_acquisition_fps(self, paths: TrialPaths) -> None:
+        metadata_path = find_metadata_path(self.data_root, paths.trial_id, paths.rel_parent)
+        self.acquisition_fps, self.acquisition_fps_source = fps_from_metadata_path(metadata_path, default_fps=2.0)
+        if hasattr(self, "playback_info_label"):
+            self.update_play_timer_interval()
+
+    def effective_playback_fps(self) -> float:
+        if self.playback_mode_combo.currentData() == "real-time":
+            return max(float(self.acquisition_fps) * float(self.speed_spin.value()), 0.1)
+        return max(float(self.fps_spin.value()), 0.1)
+
+    def update_playback_controls(self) -> None:
+        real_time = self.playback_mode_combo.currentData() == "real-time"
+        self.speed_spin.setVisible(real_time)
+        self.fps_spin.setVisible(not real_time)
+        self.update_play_timer_interval()
+
     def update_play_timer_interval(self) -> None:
-        fps = max(int(self.fps_spin.value()), 1)
+        fps = self.effective_playback_fps()
         self.play_timer.setInterval(max(1, int(round(1000.0 / fps))))
+        mode = "real" if self.playback_mode_combo.currentData() == "real-time" else "display"
+        self.playback_info_label.setText(
+            f"{fps:.2g} fps ({mode}; acquired {self.acquisition_fps:.3g} fps)"
+        )
 
     def update_display_contrast(self) -> None:
         low = float(self.black_spin.value())

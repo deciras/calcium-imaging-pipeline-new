@@ -48,7 +48,7 @@ GUI 会在各步骤输出文件夹下递归搜索 movie 和 suite2p 结果，所
 - 右边最终 ROI 图在 `select ROI` 模式下支持 `Shift` 拖框选择多个 final ROI；框选后会同步选中 `ROI table` 里的对应行。
 - 右边窗口：切到 `draw freehand ROI` 后，可以按住鼠标或数位板笔直接圈画 ROI。
 - 右边窗口：切到 `draw ellipse ROI` 后，可以拖出一个椭圆 ROI。
-- 下方滑条：拖动时间帧；`Play/Pause` 可以播放/暂停，旁边的 `fps` 可以调播放速度。
+- 下方滑条：拖动时间帧；`Play/Pause` 可以播放/暂停。播放速度可以选 `real-time x`，按 metadata 里的实际采集帧率乘以倍速播放；也可以选 `display fps`，手动指定界面播放帧率。
 - 右侧表格：最终 ROI set 和本次临时移除的 ROI。
 - Trace 图：显示当前选中 ROI 的 `F`、`Fneu`、`F - 0.7Fneu` 和 dF/F。
 
