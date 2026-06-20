@@ -913,9 +913,11 @@ class CurationWindow(QMainWindow):
         self.pan_tool_check.stateChanged.connect(self.toggle_pan_tool)
 
         self.render_scale_spin = QDoubleSpinBox()
-        self.render_scale_spin.setRange(0.50, 1.0)
+        self.render_scale_spin.setRange(0.25, 1.0)
         self.render_scale_spin.setDecimals(2)
         self.render_scale_spin.setSingleStep(0.25)
+        self.render_scale_spin.setSuffix(" x")
+        self.render_scale_spin.setToolTip("Lower values render faster but blurrier; 1.00 keeps full display detail.")
         self.render_scale_spin.setValue(0.75 if platform.system() == "Linux" else 1.0)
         self.render_scale_spin.valueChanged.connect(self.update_render_scale)
 
@@ -1008,6 +1010,12 @@ class CurationWindow(QMainWindow):
         finish_btn.clicked.connect(self.finish_polygon_roi)
         clear_btn = QPushButton("Clear drawing")
         clear_btn.clicked.connect(self.clear_polygon)
+        self.auto_trace_check = QCheckBox("auto trace")
+        self.auto_trace_check.setChecked(False)
+        self.auto_trace_check.setToolTip("If enabled, every ROI selection recomputes F/Fneu/dF/F immediately.")
+        self.auto_trace_check.stateChanged.connect(lambda _: self.update_trace_plot(force=self.auto_trace_check.isChecked()))
+        update_trace_btn = QPushButton("Update trace")
+        update_trace_btn.clicked.connect(lambda: self.update_trace_plot(force=True))
         save_btn = QPushButton("Save manual curation")
         save_btn.clicked.connect(lambda: self.save_outputs())
         save_close_btn = QPushButton("Save and close")
@@ -1047,7 +1055,7 @@ class CurationWindow(QMainWindow):
         controls.addWidget(reset_zoom_btn)
         controls.addWidget(QLabel("Performance"))
         perf_row = QHBoxLayout()
-        perf_row.addWidget(QLabel("render"))
+        perf_row.addWidget(QLabel("render scale"))
         perf_row.addWidget(self.render_scale_spin)
         controls.addLayout(perf_row)
         controls.addWidget(self.fast_play_single_view)
@@ -1075,6 +1083,10 @@ class CurationWindow(QMainWindow):
         controls.addWidget(clear_btn)
         controls.addSpacing(10)
         controls.addWidget(QLabel("Trace"))
+        trace_row = QHBoxLayout()
+        trace_row.addWidget(self.auto_trace_check)
+        trace_row.addWidget(update_trace_btn)
+        controls.addLayout(trace_row)
         controls.addWidget(self.trace_canvas)
         controls.addSpacing(10)
         controls.addWidget(save_btn)
@@ -3010,7 +3022,10 @@ class CurationWindow(QMainWindow):
         self.refresh()
         self.update_trace_plot()
 
-    def update_trace_plot(self) -> None:
+    def update_trace_plot(self, force: bool = False) -> None:
+        if hasattr(self, "auto_trace_check") and not force and not self.auto_trace_check.isChecked():
+            self.trace_canvas.plot_empty("Trace paused; press Update trace")
+            return
         if self.selected_manual_roi is not None and 0 <= self.selected_manual_roi < len(self.added_rois):
             self.ensure_manual_traces_current()
             if self.selected_manual_roi is None or self.selected_manual_roi >= len(self.added_rois):
