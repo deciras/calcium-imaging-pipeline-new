@@ -920,9 +920,9 @@ class CurationWindow(QMainWindow):
         self.render_scale_spin.valueChanged.connect(self.update_render_scale)
 
         self.fast_play_single_view = QCheckBox("play left only")
-        self.fast_play_single_view.setChecked(platform.system() == "Linux")
+        self.fast_play_single_view.setChecked(False)
         self.fast_play_no_overlays = QCheckBox("hide overlays while playing")
-        self.fast_play_no_overlays.setChecked(platform.system() == "Linux")
+        self.fast_play_no_overlays.setChecked(False)
         self.fast_play_single_view.stateChanged.connect(lambda _: self.refresh())
         self.fast_play_no_overlays.stateChanged.connect(lambda _: self.rebuild_and_refresh())
 
@@ -1791,21 +1791,21 @@ class CurationWindow(QMainWindow):
             if valid_selected:
                 loaded_parts.append(f"{len(valid_selected)} current suite2p pick(s)")
 
-        saved_rois_for_additions: list[dict] = []
-        if additions_path.exists():
+        saved_rois_for_additions: list[dict] = [
+            saved
+            for saved in saved_roi_set
+            if saved.get("roi_source") not in {"suite2p_reference", "suite2p"}
+        ]
+        loaded_non_suite2p_from = "manual_roi_set"
+        if not saved_rois_for_additions and additions_path.exists():
             try:
                 with additions_path.open("r", encoding="utf-8") as handle:
                     loaded = json.load(handle)
                     saved_rois_for_additions = loaded if isinstance(loaded, list) else []
+                    loaded_non_suite2p_from = "manual_added_rois"
             except Exception as exc:
                 QMessageBox.warning(self, "Load saved ROI", f"Could not load saved manual ROIs:\n{exc}")
                 saved_rois_for_additions = []
-        elif saved_roi_set:
-            saved_rois_for_additions = [
-                saved
-                for saved in saved_roi_set
-                if saved.get("roi_source") not in {"suite2p_reference", "suite2p"}
-            ]
 
         if saved_rois_for_additions:
             self.added_rois = []
@@ -1823,7 +1823,7 @@ class CurationWindow(QMainWindow):
                 if saved.get("status", "accepted") != "rejected":
                     self.added_rois.append(roi)
             self.recompute_manual_roi_traces()
-            loaded_parts.append(f"{len(self.added_rois)} manual ROI(s)")
+            loaded_parts.append(f"{len(self.added_rois)} non-suite2p final ROI(s) from {loaded_non_suite2p_from}")
 
         imported = self.import_saved_suite2p_picks_as_manual(saved_roi_set, stale_saved_suite2p_refs)
         if imported:
@@ -3603,13 +3603,17 @@ class CurationWindow(QMainWindow):
             "selected_suite2p_indices_path": str(kept_path),
             "deleted_suite2p_indices_path": str(deleted_path),
             "manual_added_rois_path": str(additions_path),
+            "manual_added_rois_note": "Legacy-compatible cache for non-suite2p final ROIs, including hand-drawn and Cellpose-derived ROIs.",
             "manual_roi_set_path": str(new_roi_set_path),
+            "manual_roi_set_note": "Primary saved final ROI set used when reopening this trial.",
             "suite2p_compatible_dir": str(suite2p_compat_dir),
             "fiji_roiset_zip_path": str(fiji_roi_zip_path),
             "manual_added_roi_traces_path": str(trace_path) if trace_rows else None,
             "n_suite2p_roi": int(len(self.iscell)),
             "n_selected_suite2p_reference_roi": int(len(kept_indices)),
             "n_deleted_suite2p_reference_roi": 0,
+            "n_non_suite2p_final_roi": int(len(self.added_rois)),
+            "n_non_suite2p_final_accepted_roi": int(len(self.added_rois)),
             "n_manual_added_roi": int(len(self.added_rois)),
             "n_manual_added_accepted_roi": int(len(self.added_rois)),
             "n_new_roi_set": int(len(new_roi_set)),
@@ -3619,8 +3623,9 @@ class CurationWindow(QMainWindow):
             "neuropil_mask_source": "local_annulus_excluding_other_final_rois",
             "f0_percentile": float(self.f0_percentile),
             "note": (
-                "The saved manual ROI set contains accepted manual ROIs plus selected "
-                "suite2p reference ROIs only. Suite2p source files are not edited in place. "
+                "The saved manual ROI set contains all accepted final ROIs: selected suite2p "
+                "reference ROIs plus non-suite2p ROIs such as Cellpose-derived or hand-drawn ROIs. "
+                "Suite2p and Cellpose source files are not edited in place. "
                 "Displayed and exported ROI traces use the motion-corrected movie when available, while "
                 "brightness/contrast controls affect display only. Fneu uses a local annulus around each "
                 "ROI and excludes pixels belonging to other accepted final ROIs."
