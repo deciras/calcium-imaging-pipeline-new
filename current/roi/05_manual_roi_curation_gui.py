@@ -1714,7 +1714,7 @@ class CurationWindow(QMainWindow):
             if int(mask.sum()) < 3:
                 continue
             self.added_rois = saved_rois
-            roi = self.build_manual_roi(mask, exclude_manual_idx=idx)
+            roi = self.build_manual_roi(mask, exclude_manual_idx=idx, compute_traces=True)
             computed_trace_keys = {"f0", "trace_summary", "trace_movie_path", "neuropil_pixels"}
             roi.update(
                 {
@@ -1847,19 +1847,19 @@ class CurationWindow(QMainWindow):
                 mask = polygon_mask(points, self.movie.shape[-2:])
                 if int(mask.sum()) < 3:
                     continue
-                roi = self.build_manual_roi(mask)
+                roi = self.build_manual_roi(mask, compute_traces=False)
                 roi.update({k: v for k, v in saved.items() if not k.startswith("_trace_")})
                 roi["status"] = "accepted"
                 roi["points"] = points
                 if saved.get("status", "accepted") != "rejected":
                     self.added_rois.append(roi)
-            self.recompute_manual_roi_traces()
+            self.mark_manual_traces_dirty()
             loaded_parts.append(f"{len(self.added_rois)} non-suite2p final ROI(s) from {loaded_non_suite2p_from}")
 
         imported = self.import_saved_suite2p_picks_as_manual(saved_roi_set, stale_saved_suite2p_refs)
         if imported:
             loaded_parts.append(f"{imported} stale suite2p ROI(s) converted to manual")
-            self.recompute_manual_roi_traces()
+            self.mark_manual_traces_dirty()
 
         if loaded_parts:
             self.dirty = False
@@ -1949,7 +1949,7 @@ class CurationWindow(QMainWindow):
             mask = polygon_mask(points, self.movie.shape[-2:])
             if int(mask.sum()) < 3:
                 continue
-            roi = self.build_manual_roi(mask)
+            roi = self.build_manual_roi(mask, compute_traces=False)
             roi.update(
                 {
                     "manual_roi_id": self.next_manual_roi_id(),
@@ -2621,7 +2621,7 @@ class CurationWindow(QMainWindow):
             QMessageBox.warning(self, "Drawn ROI", "The ROI is too small.")
             return
         self.push_undo("add-manual")
-        roi = self.build_manual_roi(mask)
+        roi = self.build_manual_roi(mask, compute_traces=False)
         self.added_rois.append(roi)
         self.selected_roi = None
         self.selected_manual_roi = len(self.added_rois) - 1
