@@ -35,6 +35,7 @@ GUI 会在各步骤输出文件夹下递归搜索 movie 和 suite2p 结果，所
   - `spatial high-pass (04)`：04 空间高通滤波后的 movie
 - 切换 `Movie source` 只是换当前 trial 的显示底片，不会另存一套 ROI，也不会要求保存。手画 ROI 和已选 suite2p ROI 会继续保留。
 - `Display` 里的 `black` / `white` 类似 Fiji 的 brightness/contrast：只改变画面显示，不改变原始 movie，也不改变 trace。
+- `Performance`：只影响 GUI 显示速度，不改变 ROI 坐标、保存结果或 trace 计算。Linux 工作站默认用半分辨率渲染、播放时只刷新左侧参考图、播放时隐藏 overlay；如果需要精看边界，可以把 `render` 调回 `1.00`，或取消这些播放加速选项。
 - `Date` / `Trial`：先选择日期，再从当天 trial 下拉框里选择文件。`all dates` 会显示所有 trial，并在 trial 名前带上日期。可以点 `Load selected` 打开选中的 trial，也可以点 `Next` 切到当前日期下的下一个 trial。
 - 右侧控制区可以上下滚动，屏幕较小时按钮不会被挤出窗口。
 - 左边窗口：默认只显示视频，不显示候选 ROI。

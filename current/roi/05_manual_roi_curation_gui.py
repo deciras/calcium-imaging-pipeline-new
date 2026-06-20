@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import platform
 import struct
 import sys
 import zipfile
@@ -911,6 +912,20 @@ class CurationWindow(QMainWindow):
         self.pan_tool_check = QCheckBox("drag to pan")
         self.pan_tool_check.stateChanged.connect(self.toggle_pan_tool)
 
+        self.render_scale_spin = QDoubleSpinBox()
+        self.render_scale_spin.setRange(0.25, 1.0)
+        self.render_scale_spin.setDecimals(2)
+        self.render_scale_spin.setSingleStep(0.25)
+        self.render_scale_spin.setValue(0.5 if platform.system() == "Linux" else 1.0)
+        self.render_scale_spin.valueChanged.connect(self.update_render_scale)
+
+        self.fast_play_single_view = QCheckBox("play left only")
+        self.fast_play_single_view.setChecked(platform.system() == "Linux")
+        self.fast_play_no_overlays = QCheckBox("hide overlays while playing")
+        self.fast_play_no_overlays.setChecked(platform.system() == "Linux")
+        self.fast_play_single_view.stateChanged.connect(lambda _: self.refresh())
+        self.fast_play_no_overlays.stateChanged.connect(lambda _: self.rebuild_and_refresh())
+
         self.roi_table = QTableWidget(0, 4)
         self.roi_table.setHorizontalHeaderLabels(["source", "id", "type", "state"])
         self.roi_table.setMinimumHeight(150)
@@ -1030,6 +1045,13 @@ class CurationWindow(QMainWindow):
         controls.addLayout(view_row)
         controls.addWidget(self.pan_tool_check)
         controls.addWidget(reset_zoom_btn)
+        controls.addWidget(QLabel("Performance"))
+        perf_row = QHBoxLayout()
+        perf_row.addWidget(QLabel("render"))
+        perf_row.addWidget(self.render_scale_spin)
+        controls.addLayout(perf_row)
+        controls.addWidget(self.fast_play_single_view)
+        controls.addWidget(self.fast_play_no_overlays)
         controls.addSpacing(10)
         controls.addWidget(QLabel("ROI table"))
         controls.addWidget(self.roi_table)
@@ -1127,6 +1149,13 @@ class CurationWindow(QMainWindow):
         self.left_canvas.reset_view(emit=False)
         self.right_canvas.reset_view(emit=False)
         self.status.showMessage("Zoom reset")
+
+    def render_scale(self) -> float:
+        return float(self.render_scale_spin.value()) if hasattr(self, "render_scale_spin") else 1.0
+
+    def update_render_scale(self) -> None:
+        self.invalidate_all_image_caches()
+        self.refresh()
 
     def toggle_pan_tool(self) -> None:
         enabled = self.pan_tool_check.isChecked()
@@ -2065,6 +2094,7 @@ class CurationWindow(QMainWindow):
     def start_playback(self) -> None:
         self.playing = True
         self.play_btn.setText("Pause")
+        self.invalidate_overlay_cache()
         self.update_play_timer_interval()
         self.play_timer.start()
 
@@ -2072,6 +2102,8 @@ class CurationWindow(QMainWindow):
         self.playing = False
         self.play_btn.setText("Play")
         self.play_timer.stop()
+        self.invalidate_overlay_cache()
+        self.refresh()
 
     def pause_for_manual_frame_scrub(self) -> None:
         if self.playing:
@@ -2950,11 +2982,20 @@ class CurationWindow(QMainWindow):
         self.trace_canvas.plot_traces(f"suite2p ROI {self.selected_roi}", f, fneu, fcorr, dff)
 
     def base_frame_pixmap(self) -> QPixmap:
-        key = (int(self.frame_index), round(float(self.low_pct), 3), round(float(self.high_pct), 3))
+        scale = self.render_scale()
+        key = (int(self.frame_index), round(float(self.low_pct), 3), round(float(self.high_pct), 3), round(scale, 3))
         cached = self._base_pixmap_cache.get(key)
         if cached is not None:
             return QPixmap(cached)
         frame = normalize_frame(self.movie[self.frame_index], self.low_pct, self.high_pct)
+        if scale < 0.999:
+            height, width = frame.shape
+            out_h = max(1, int(round(height * scale)))
+            out_w = max(1, int(round(width * scale)))
+            y_idx = np.linspace(0, height - 1, out_h).astype(np.int32)
+            x_idx = np.linspace(0, width - 1, out_w).astype(np.int32)
+            frame = frame[np.ix_(y_idx, x_idx)]
+        frame = np.ascontiguousarray(frame)
         height, width = frame.shape
         qimg = QImage(frame.data, width, height, width, QImage.Format.Format_Grayscale8).copy()
         pixmap = QPixmap.fromImage(qimg)
@@ -2966,6 +3007,7 @@ class CurationWindow(QMainWindow):
         return (
             view,
             self._roi_overlay_revision,
+            round(self.render_scale(), 3),
             bool(self.show_suite2p_refs),
             bool(self.show_cellpose_refs),
             bool(self.show_suite2p_iscell0.isChecked()),
@@ -2976,6 +3018,7 @@ class CurationWindow(QMainWindow):
             tuple(sorted(self.valid_candidate_cellpose_selection())),
             tuple(sorted(self.selected_suite2p_refs)),
             len(self.added_rois),
+            bool(self.playing and self.fast_play_no_overlays.isChecked()),
         )
 
     def static_overlay_pixmap(self, view: str, width: int, height: int) -> QPixmap:
@@ -2985,7 +3028,10 @@ class CurationWindow(QMainWindow):
             return QPixmap(cached)
         overlay = QPixmap(width, height)
         overlay.fill(Qt.GlobalColor.transparent)
+        if self.playing and self.fast_play_no_overlays.isChecked():
+            return overlay
         painter = QPainter(overlay)
+        painter.scale(self.render_scale(), self.render_scale())
         if view == "reference":
             self.paint_suite2p_rois(painter, selected_only=False)
             self.paint_cellpose_rois(painter)
@@ -3003,6 +3049,7 @@ class CurationWindow(QMainWindow):
         pixmap = self.base_frame_pixmap()
         painter = QPainter(pixmap)
         painter.drawPixmap(0, 0, self.static_overlay_pixmap(view, pixmap.width(), pixmap.height()))
+        painter.scale(self.render_scale(), self.render_scale())
         self.paint_current_polygon(painter)
         self.paint_selection_box(painter, view)
         painter.end()
@@ -3106,7 +3153,8 @@ class CurationWindow(QMainWindow):
     def refresh(self) -> None:
         shape = (self.movie.shape[-2], self.movie.shape[-1])
         self.left_canvas.set_rendered_pixmap(self.frame_pixmap(view="reference"), shape)
-        self.right_canvas.set_rendered_pixmap(self.frame_pixmap(view="edit"), shape)
+        if not (self.playing and self.fast_play_single_view.isChecked()):
+            self.right_canvas.set_rendered_pixmap(self.frame_pixmap(view="edit"), shape)
         kept = int(len(self.selected_suite2p_refs))
         self.status.showMessage(
             f"trial={self.paths.trial_id} | frame={self.frame_index}/{self.movie.shape[0]-1} | "
