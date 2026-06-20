@@ -990,6 +990,8 @@ class CurationWindow(QMainWindow):
 
         keep_btn = QPushButton("Keep selected")
         keep_btn.clicked.connect(lambda: self.set_selected_state(1))
+        keep_all_visible_btn = QPushButton("Keep all visible refs")
+        keep_all_visible_btn.clicked.connect(self.keep_all_visible_refs)
         remove_btn = QPushButton("Remove selected")
         remove_btn.clicked.connect(lambda: self.set_selected_state(0))
         delete_btn = QPushButton("Delete selected")
@@ -1068,6 +1070,7 @@ class CurationWindow(QMainWindow):
         controls.addWidget(self.show_cellpose)
         controls.addWidget(self.show_final_rois)
         controls.addWidget(keep_btn)
+        controls.addWidget(keep_all_visible_btn)
         controls.addWidget(remove_btn)
         controls.addWidget(delete_btn)
         controls.addWidget(QLabel("Removed this session"))
@@ -1703,7 +1706,14 @@ class CurationWindow(QMainWindow):
                 continue
             self.added_rois = saved_rois
             roi = self.build_manual_roi(mask, exclude_manual_idx=idx)
-            roi.update({k: v for k, v in saved.items() if not k.startswith("_trace_")})
+            computed_trace_keys = {"f0", "trace_summary", "trace_movie_path", "neuropil_pixels"}
+            roi.update(
+                {
+                    k: v
+                    for k, v in saved.items()
+                    if not k.startswith("_trace_") and k not in computed_trace_keys
+                }
+            )
             roi["points"] = points
             refreshed.append(roi)
         self.added_rois = refreshed
@@ -2644,12 +2654,9 @@ class CurationWindow(QMainWindow):
         points: list[tuple[float, float]] | None = None,
         roi_type: str | None = None,
         extra: dict | None = None,
+        compute_traces: bool = True,
     ) -> dict:
         ypix, xpix = np.nonzero(mask)
-        f, fneu, fcorr, dff, f0, neuropil_pixels = self.traces_for_mask(
-            mask,
-            exclusion_mask=self.final_roi_exclusion_mask(mask.shape, exclude_manual_idx=exclude_manual_idx),
-        )
         roi = {
             "manual_roi_id": self.next_manual_roi_id(),
             "roi_type": roi_type or ("ellipse" if self.mode_combo.currentText() == "draw ellipse ROI" else "freehand"),
@@ -2661,22 +2668,33 @@ class CurationWindow(QMainWindow):
             "y_mean": float(np.mean(ypix)),
             "neuropil_coeff": float(self.neuropil_coeff),
             "f0_percentile": float(self.f0_percentile),
-            "f0": float(f0),
+            "f0": None,
             "trace_movie_path": str(self.trace_movie_path),
             "neuropil_exclusion": "other_final_rois",
-            "neuropil_pixels": int(neuropil_pixels),
-            "trace_summary": {
-                "mean_F": float(np.nanmean(f)),
-                "mean_Fneu": float(np.nanmean(fneu)),
-                "mean_F_corrected": float(np.nanmean(fcorr)),
-                "mean_dff": float(np.nanmean(dff)),
-                "max_dff": float(np.nanmax(dff)),
-            },
-            "_trace_F": f.astype(float).tolist(),
-            "_trace_Fneu": fneu.astype(float).tolist(),
-            "_trace_F_corrected": fcorr.astype(float).tolist(),
-            "_trace_dff": dff.astype(float).tolist(),
+            "neuropil_pixels": 0,
         }
+        if compute_traces:
+            f, fneu, fcorr, dff, f0, neuropil_pixels = self.traces_for_mask(
+                mask,
+                exclusion_mask=self.final_roi_exclusion_mask(mask.shape, exclude_manual_idx=exclude_manual_idx),
+            )
+            roi.update(
+                {
+                    "f0": float(f0),
+                    "neuropil_pixels": int(neuropil_pixels),
+                    "trace_summary": {
+                        "mean_F": float(np.nanmean(f)),
+                        "mean_Fneu": float(np.nanmean(fneu)),
+                        "mean_F_corrected": float(np.nanmean(fcorr)),
+                        "mean_dff": float(np.nanmean(dff)),
+                        "max_dff": float(np.nanmax(dff)),
+                    },
+                    "_trace_F": f.astype(float).tolist(),
+                    "_trace_Fneu": fneu.astype(float).tolist(),
+                    "_trace_F_corrected": fcorr.astype(float).tolist(),
+                    "_trace_dff": dff.astype(float).tolist(),
+                }
+            )
         if extra:
             roi.update(extra)
         return roi
@@ -2736,11 +2754,18 @@ class CurationWindow(QMainWindow):
         xpix = np.asarray(roi.get("boundary_xpix", roi.get("xpix", [])), dtype=np.int32)
         return ordered_boundary_points(ypix, xpix)
 
-    def add_cellpose_candidate_to_final(self, roi_idx: int) -> bool:
+    def add_cellpose_candidate_to_final(
+        self,
+        roi_idx: int,
+        push_undo: bool = True,
+        refresh: bool = True,
+        compute_traces: bool = False,
+    ) -> bool:
         mask = self.cellpose_mask(roi_idx)
         if not np.any(mask):
             return False
-        self.push_undo("cellpose-pick")
+        if push_undo:
+            self.push_undo("cellpose-pick")
         points = self.cellpose_points(roi_idx)
         roi = self.build_manual_roi(
             mask,
@@ -2750,6 +2775,7 @@ class CurationWindow(QMainWindow):
                 "roi_source": "cellpose",
                 "cellpose_original_id": int(roi_idx),
             },
+            compute_traces=compute_traces,
         )
         self.added_rois.append(roi)
         self.selected_manual_roi = len(self.added_rois) - 1
@@ -2759,9 +2785,10 @@ class CurationWindow(QMainWindow):
         self.mark_manual_traces_dirty()
         self.invalidate_overlay_cache()
         self.dirty = True
-        self.populate_roi_list()
-        self.refresh()
-        self.update_trace_plot()
+        if refresh:
+            self.populate_roi_list()
+            self.refresh()
+            self.update_trace_plot()
         return True
 
     def mean_trace(self, mask: np.ndarray) -> np.ndarray:
@@ -2773,15 +2800,72 @@ class CurationWindow(QMainWindow):
         pixels = trace_movie[:, mask]
         return np.asarray(np.nanmean(pixels, axis=1), dtype=np.float32)
 
+    def keep_all_visible_refs(self) -> None:
+        suite2p_indices = [
+            idx
+            for idx in range(len(self.roi_cache))
+            if self.show_suite2p_refs and self.suite2p_ref_visible(idx)
+        ]
+        cellpose_indices = [
+            idx
+            for idx in range(len(self.cellpose_cache))
+            if self.show_cellpose_refs and self.cellpose_ref_visible(idx)
+        ]
+        if not suite2p_indices and not cellpose_indices:
+            self.status.showMessage("No visible reference ROIs to keep")
+            return
+        self.push_undo("keep-all-visible-refs")
+        for roi_idx in suite2p_indices:
+            self.selected_suite2p_refs.add(int(roi_idx))
+            if 0 <= roi_idx < len(self.iscell):
+                self.iscell[roi_idx, 0] = 1.0
+                self.iscell[roi_idx, 1] = 1.0
+        added_cellpose = 0
+        for roi_idx in cellpose_indices:
+            if self.add_cellpose_candidate_to_final(
+                int(roi_idx),
+                push_undo=False,
+                refresh=False,
+                compute_traces=False,
+            ):
+                added_cellpose += 1
+        self.clear_candidate_selection()
+        self.selected_roi = suite2p_indices[-1] if suite2p_indices else None
+        if added_cellpose:
+            self.selected_roi = None
+            self.selected_manual_roi = len(self.added_rois) - 1
+        self.selected_removed_roi = None
+        self.mark_manual_traces_dirty()
+        self.invalidate_overlay_cache()
+        self.dirty = True
+        self.populate_roi_list()
+        self.status.showMessage(
+            f"Kept {len(suite2p_indices)} suite2p and {added_cellpose} Cellpose visible reference ROI(s)"
+        )
+        self.refresh()
+        self.update_trace_plot()
+
     def set_selected_state(self, state: int) -> None:
         cellpose_indices = sorted(self.valid_candidate_cellpose_selection())
         if state and cellpose_indices:
+            self.push_undo("cellpose-pick-batch")
             added = 0
             for roi_idx in cellpose_indices:
-                if self.add_cellpose_candidate_to_final(int(roi_idx)):
+                if self.add_cellpose_candidate_to_final(
+                    int(roi_idx),
+                    push_undo=False,
+                    refresh=False,
+                    compute_traces=False,
+                ):
                     added += 1
             self.clear_candidate_selection()
+            self.mark_manual_traces_dirty()
+            self.invalidate_overlay_cache()
+            self.dirty = True
+            self.populate_roi_list()
             self.status.showMessage(f"Added {added} cellpose candidate ROI(s) to final set")
+            self.refresh()
+            self.update_trace_plot()
             return
 
         candidate_indices = sorted(self.valid_candidate_suite2p_selection())
