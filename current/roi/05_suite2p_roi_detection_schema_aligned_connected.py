@@ -246,6 +246,14 @@ def sanity_check_tiff_is_time_series_2d(tif_path: Path, min_frames: int) -> tupl
         return False, f"Failed to read TIFF: {exc}"
 
 
+def failure_should_skip(message: str) -> bool:
+    text = str(message).lower()
+    return (
+        "total number of frames should be at least" in text
+        or "too few frames" in text
+    )
+
+
 def get_trial_metadata(metadata_path: Path | None, cell_diameter_um: float, min_diameter_px: int, diameter_scale: float) -> dict:
     meta = {
         "nplanes": 1,
@@ -507,6 +515,8 @@ def run_one_trial(payload: dict) -> dict:
         log("ERROR:")
         log(str(exc))
         log(traceback.format_exc())
+        if failure_should_skip(str(exc)):
+            return {"trial": trial_id, "status": "skipped", "message": str(exc), "n_rois": 0, "n_iscell": 0}
         return {"trial": trial_id, "status": "failed", "message": str(exc), "n_rois": 0, "n_iscell": 0}
 
 
@@ -603,6 +613,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.dry_run:
             summary.processed += 1
             LOGGER.info("[dry-run] Would run suite2p on %s -> %s", trial.movie_path, out_dir)
+            continue
+        ok, info = sanity_check_tiff_is_time_series_2d(trial.movie_path, args.min_frames)
+        if not ok:
+            summary.skipped += 1
+            LOGGER.info("[skip] %s: %s", trial.trial_id, info)
             continue
         if args.action == "overwrite":
             clean_step_outputs(out_dir)
