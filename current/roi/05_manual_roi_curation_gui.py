@@ -1225,6 +1225,15 @@ class CurationWindow(QMainWindow):
         if self._manual_traces_dirty:
             self.recompute_manual_roi_traces()
 
+    def ensure_selected_manual_trace_current(self) -> bool:
+        if self.selected_manual_roi is None or not (0 <= self.selected_manual_roi < len(self.added_rois)):
+            return False
+        roi = self.added_rois[self.selected_manual_roi]
+        trace_keys = {"_trace_F", "_trace_Fneu", "_trace_F_corrected", "_trace_dff"}
+        if not self._manual_traces_dirty and trace_keys.issubset(roi):
+            return True
+        return self.recompute_manual_roi_trace(self.selected_manual_roi)
+
     def reset_canvas_zoom(self) -> None:
         self.left_canvas.reset_view(emit=False)
         self.right_canvas.reset_view(emit=False)
@@ -1790,6 +1799,29 @@ class CurationWindow(QMainWindow):
             refreshed.append(roi)
         self.added_rois = refreshed
         self._manual_traces_dirty = False
+
+    def recompute_manual_roi_trace(self, idx: int) -> bool:
+        if not (0 <= idx < len(self.added_rois)):
+            return False
+        saved = self.added_rois[idx]
+        points = [(float(x), float(y)) for x, y in saved.get("points", [])]
+        if len(points) < 3:
+            return False
+        mask = polygon_mask(points, self.movie.shape[-2:])
+        if int(mask.sum()) < 3:
+            return False
+        roi = self.build_manual_roi(mask, exclude_manual_idx=idx, compute_traces=True)
+        computed_trace_keys = {"f0", "trace_summary", "trace_movie_path", "neuropil_pixels"}
+        roi.update(
+            {
+                k: v
+                for k, v in saved.items()
+                if not k.startswith("_trace_") and k not in computed_trace_keys
+            }
+        )
+        roi["points"] = points
+        self.added_rois[idx] = roi
+        return True
 
     def default_trace_movie_path(self, paths: TrialPaths) -> Path:
         for kind in ("corrected", "raw"):
@@ -3235,9 +3267,8 @@ class CurationWindow(QMainWindow):
             return
         self._trace_pause_notice_shown = False
         if self.selected_manual_roi is not None and 0 <= self.selected_manual_roi < len(self.added_rois):
-            self.ensure_manual_traces_current()
-            if self.selected_manual_roi is None or self.selected_manual_roi >= len(self.added_rois):
-                self.trace_canvas.plot_empty("Select a ROI or draw a freehand/ellipse ROI")
+            if not self.ensure_selected_manual_trace_current():
+                self.trace_canvas.plot_empty("Selected manual ROI trace could not be computed")
                 return
             roi = self.added_rois[self.selected_manual_roi]
             roi_type = roi.get("roi_type", "manual")
