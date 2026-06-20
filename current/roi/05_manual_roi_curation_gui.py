@@ -26,7 +26,7 @@ import tifffile as tf
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from matplotlib.path import Path as MplPath
-from PySide6.QtCore import QEvent, QItemSelectionModel, QPoint, QPointF, QRect, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QItemSelectionModel, QPoint, QPointF, QRect, QSettings, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap, QPolygon
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -75,6 +75,9 @@ MOVIE_PATTERNS = {
     "spatial-highpass": "*_spatial_highpass_movie.tif",
 }
 
+SETTINGS_ORG = "calcium-imaging-pipeline"
+SETTINGS_APP = "manual-roi-curation"
+
 
 def step_root_for_movie_kind(data_root: Path, movie_kind: str) -> Path:
     if movie_kind == "raw":
@@ -82,6 +85,28 @@ def step_root_for_movie_kind(data_root: Path, movie_kind: str) -> Path:
     if movie_kind == "spatial-highpass":
         return data_root / "04_spatial_highpass"
     return data_root / "03_motion_correct"
+
+
+def manual_gui_settings() -> QSettings:
+    return QSettings(SETTINGS_ORG, SETTINGS_APP)
+
+
+def last_trial_settings_key(data_root: Path, movie_kind: str) -> str:
+    root_key = str(data_root.expanduser().resolve()).replace("/", "__").replace("\\", "__").replace(":", "_")
+    return f"last_trial/{root_key}/{movie_kind}"
+
+
+def save_last_trial_setting(data_root: Path, movie_kind: str, trial_id: str) -> None:
+    settings = manual_gui_settings()
+    settings.setValue(last_trial_settings_key(data_root, movie_kind), str(trial_id))
+    settings.sync()
+
+
+def load_last_trial_setting(data_root: Path, movie_kind: str, trial_ids: list[str]) -> str | None:
+    saved = manual_gui_settings().value(last_trial_settings_key(data_root, movie_kind), "", type=str)
+    if saved and saved in trial_ids:
+        return str(saved)
+    return None
 
 
 def trial_rel_parent(trial_dir: Path, step_root: Path) -> Path:
@@ -771,6 +796,7 @@ class CurationWindow(QMainWindow):
         self.paths = paths
         self.data_root = data_root
         self.movie_kind = movie_kind
+        save_last_trial_setting(self.data_root, self.movie_kind, self.paths.trial_id)
         self.trial_ids = discover_trial_ids(data_root, movie_kind)
         if paths.trial_id not in self.trial_ids:
             self.trial_ids.insert(0, paths.trial_id)
@@ -1679,6 +1705,7 @@ class CurationWindow(QMainWindow):
             return
         self.movie_kind = new_kind
         self.paths = paths
+        save_last_trial_setting(self.data_root, self.movie_kind, self.paths.trial_id)
         self.movie = movie_as_tyx(paths.movie_path)
         self.refresh_acquisition_fps(paths)
         self.frame_index = min(self.frame_index, max(self.movie.shape[0] - 1, 0))
@@ -2045,6 +2072,7 @@ class CurationWindow(QMainWindow):
                 self.start_playback()
             return
         self.paths = paths
+        save_last_trial_setting(self.data_root, self.movie_kind, self.paths.trial_id)
         self.setWindowTitle(f"ROI curation - {paths.trial_id}")
         self.stat = np.array([], dtype=object)
         self.roi_cache = []
@@ -3791,6 +3819,7 @@ class CurationWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         if self.maybe_save_before_switch(reason="closing"):
+            save_last_trial_setting(self.data_root, self.movie_kind, self.paths.trial_id)
             event.accept()
         else:
             event.ignore()
@@ -3822,7 +3851,7 @@ def main(argv: list[str] | None = None) -> int:
         if not trial_ids:
             QMessageBox.critical(None, "ROI curation", f"No movies found under:\n{data_root}")
             return 1
-        trial_id = trial_ids[0]
+        trial_id = load_last_trial_setting(data_root, args.movie_kind, trial_ids) or trial_ids[0]
     paths = find_trial_paths(data_root, trial_id, args.movie_kind)
     window = CurationWindow(
         paths,
