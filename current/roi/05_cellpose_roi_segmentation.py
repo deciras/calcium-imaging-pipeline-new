@@ -166,16 +166,38 @@ def stat_from_masks(masks: np.ndarray) -> np.ndarray:
     return np.array(stats, dtype=object)
 
 
-def run_cellpose(image: np.ndarray, diameter: float | None, model_type: str, gpu: bool) -> np.ndarray:
+def run_cellpose(
+    image: np.ndarray,
+    diameter: float | None,
+    pretrained_model: str,
+    model_type: str | None,
+    gpu: bool,
+) -> np.ndarray:
     try:
         from cellpose import models
     except Exception as exc:
         raise RuntimeError("Cellpose is not installed in this environment. Install cellpose or run this step in a cellpose env.") from exc
 
-    model = models.CellposeModel(gpu=gpu, model_type=model_type)
+    model_kwargs: dict[str, object] = {"gpu": gpu}
+    if pretrained_model:
+        model_kwargs["pretrained_model"] = pretrained_model
+    if model_type:
+        model_kwargs["model_type"] = model_type
+    model = models.CellposeModel(**model_kwargs)
     result = model.eval(image, channels=[0, 0], diameter=diameter)
     masks = result[0] if isinstance(result, tuple) else result
     return np.asarray(masks, dtype=np.int32)
+
+
+def resolve_gpu(requested: bool | None) -> bool:
+    if requested is not None:
+        return bool(requested)
+    try:
+        import torch
+
+        return bool(torch.cuda.is_available())
+    except Exception:
+        return False
 
 
 def process_trial(trial: TrialInput, out_dir: Path, args: argparse.Namespace) -> str:
@@ -185,11 +207,13 @@ def process_trial(trial: TrialInput, out_dir: Path, args: argparse.Namespace) ->
         shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     image = projection_image(trial.movie_path, max_frames=args.max_projection_frames)
+    use_gpu = resolve_gpu(args.gpu)
     masks = run_cellpose(
         image=image,
         diameter=args.diameter if args.diameter > 0 else None,
+        pretrained_model=args.pretrained_model,
         model_type=args.model_type,
-        gpu=args.gpu,
+        gpu=use_gpu,
     )
     stat = stat_from_masks(masks)
     np.save(out_dir / "cellpose_masks.npy", masks)
@@ -199,9 +223,10 @@ def process_trial(trial: TrialInput, out_dir: Path, args: argparse.Namespace) ->
         "rel_parent": str(trial.rel_parent),
         "movie_path": str(trial.movie_path),
         "movie_source": trial.movie_source,
+        "pretrained_model": args.pretrained_model,
         "model_type": args.model_type,
         "diameter": args.diameter,
-        "gpu": bool(args.gpu),
+        "gpu": bool(use_gpu),
         "n_roi": int(len(stat)),
     }
     (out_dir / "cellpose_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
@@ -215,10 +240,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--action", choices=("skip", "overwrite"), default="skip")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--trial-id", help="Only process one trial ID.")
-    parser.add_argument("--model-type", default="cyto3")
+    parser.add_argument("--pretrained-model", default="cpsam_v2", help="Cellpose pretrained model name or path.")
+    parser.add_argument("--model-type", help="Optional legacy Cellpose model_type override, such as cyto3.")
     parser.add_argument("--diameter", type=float, default=0.0, help="Cellpose diameter in pixels; <=0 lets Cellpose estimate.")
     parser.add_argument("--max-projection-frames", type=int, default=200)
-    parser.add_argument("--gpu", action="store_true")
+    gpu_group = parser.add_mutually_exclusive_group()
+    gpu_group.add_argument("--gpu", dest="gpu", action="store_true", default=None, help="Force Cellpose to use CUDA.")
+    gpu_group.add_argument("--cpu", dest="gpu", action="store_false", help="Force Cellpose to use CPU.")
     parser.add_argument("--require-cellpose", action="store_true", help="Fail instead of soft-skipping when cellpose is not installed.")
     parser.add_argument("--verbose", action="store_true")
     return parser
