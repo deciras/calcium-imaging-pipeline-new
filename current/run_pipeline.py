@@ -138,6 +138,17 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
         accepts_suite2p_options=True,
     ),
     PipelineStep(
+        step_id="cellpose",
+        name="cellpose ROI segmentation",
+        script="roi/05_cellpose_roi_segmentation.py",
+        env="caiman",
+        accepts_data_root=True,
+        accepts_action=True,
+        accepts_step_dry_run=True,
+        accepts_output_root=True,
+        accepts_trial_id=True,
+    ),
+    PipelineStep(
         step_id="manual",
         name="manual ROI curation GUI",
         script="roi/05_manual_roi_curation_gui.py",
@@ -358,9 +369,9 @@ def parse_step_selector(raw_selector: str | None) -> set[str] | None:
         raise ValueError("--steps was provided, but no valid step names were found.")
 
     step_groups = {
-        "premanual": {"00", "01", "02", "03", "04", "05"},
-        "pre-manual": {"00", "01", "02", "03", "04", "05"},
-        "before-manual": {"00", "01", "02", "03", "04", "05"},
+        "premanual": {"00", "01", "02", "03", "04", "05", "cellpose"},
+        "pre-manual": {"00", "01", "02", "03", "04", "05", "cellpose"},
+        "before-manual": {"00", "01", "02", "03", "04", "05", "cellpose"},
         "basic-analysis": {"06", "07", "08", "09"},
         "basicanalysis": {"06", "07", "08", "09"},
         "basic": {"06", "07", "08", "09"},

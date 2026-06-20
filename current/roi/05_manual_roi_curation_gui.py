@@ -51,6 +51,7 @@ from PySide6.QtWidgets import (
 
 
 STEP_NAME = "05e_roi_manual_curation"
+CELLPOSE_STEP_NAME = "05_cellpose_roi_segmentation"
 
 
 @dataclass
@@ -290,6 +291,12 @@ def fps_from_metadata_path(metadata_path: Path | None, default_fps: float = 2.0)
         if interval is not None:
             return 1.0 / interval, str(metadata_path)
     return float(default_fps), "metadata fps missing"
+
+
+def cellpose_plane_dir(data_root: Path, rel_parent: Path, trial_id: str) -> Path:
+    if str(rel_parent) in ("", "."):
+        return data_root / CELLPOSE_STEP_NAME / trial_id
+    return data_root / CELLPOSE_STEP_NAME / rel_parent / trial_id
 
 
 def load_iscell(paths: TrialPaths, n_roi: int) -> np.ndarray:
@@ -776,6 +783,8 @@ class CurationWindow(QMainWindow):
         self.Fneu = None
         self.suite2p_loaded = False
         self.suite2p_ref_flags = np.zeros((0,), dtype=bool)
+        self.cellpose_loaded = False
+        self.cellpose_cache: list[dict] = []
         self.movie = movie_as_tyx(paths.movie_path)
         self.trace_movie_path = self.default_trace_movie_path(paths)
         self.trace_movie = movie_as_tyx(self.trace_movie_path)
@@ -790,7 +799,9 @@ class CurationWindow(QMainWindow):
         self.selection_box_current: tuple[float, float] | None = None
         self.selection_box_target: str | None = None
         self.show_suite2p_refs = False
+        self.show_cellpose_refs = False
         self.selected_candidate_suite2p_refs: set[int] = set()
+        self.selected_candidate_cellpose_refs: set[int] = set()
         self.selected_suite2p_refs: set[int] = set()
         self.added_rois: list[dict] = []
         self.removed_rois: list[dict] = []
@@ -948,6 +959,10 @@ class CurationWindow(QMainWindow):
         self.show_suite2p.setChecked(False)
         self.show_suite2p.stateChanged.connect(self.toggle_suite2p_refs)
 
+        self.show_cellpose = QCheckBox("show cellpose refs")
+        self.show_cellpose.setChecked(False)
+        self.show_cellpose.stateChanged.connect(self.toggle_cellpose_refs)
+
         self.show_final_rois = QCheckBox("show final ROIs on right")
         self.show_final_rois.setChecked(True)
         self.show_final_rois.stateChanged.connect(lambda _: self.refresh())
@@ -1020,6 +1035,7 @@ class CurationWindow(QMainWindow):
         controls.addWidget(self.roi_table)
         controls.addWidget(self.show_suite2p_iscell0)
         controls.addWidget(self.show_suite2p)
+        controls.addWidget(self.show_cellpose)
         controls.addWidget(self.show_final_rois)
         controls.addWidget(keep_btn)
         controls.addWidget(remove_btn)
@@ -1169,6 +1185,28 @@ class CurationWindow(QMainWindow):
         return cache
 
     @staticmethod
+    def normalize_candidate_cache(stat: np.ndarray) -> list[dict]:
+        cache: list[dict] = []
+        for roi in stat:
+            if not isinstance(roi, dict):
+                roi = dict(roi)
+            ypix = np.asarray(roi.get("ypix", []), dtype=np.int32)
+            xpix = np.asarray(roi.get("xpix", []), dtype=np.int32)
+            bypix = np.asarray(roi.get("boundary_ypix", []), dtype=np.int32)
+            bxpix = np.asarray(roi.get("boundary_xpix", []), dtype=np.int32)
+            if bypix.size == 0 or bxpix.size == 0:
+                bypix, bxpix = suite2p_roi_boundary(ypix, xpix)
+            cache.append(
+                {
+                    "ypix": ypix,
+                    "xpix": xpix,
+                    "boundary_ypix": np.asarray(bypix, dtype=np.int32),
+                    "boundary_xpix": np.asarray(bxpix, dtype=np.int32),
+                }
+            )
+        return cache
+
+    @staticmethod
     def load_trace_array(path: Path | None, n_roi: int) -> np.ndarray | None:
         if path is None or not path.exists():
             return None
@@ -1187,8 +1225,9 @@ class CurationWindow(QMainWindow):
             if ("suite2p", idx) in selected_entries or (not selected_entries and current == idx):
                 self.select_roi_table_row(row)
         for idx, roi in enumerate(self.added_rois):
+            source_label = "cellpose" if roi.get("roi_source") == "cellpose" else "manual"
             row = self.add_roi_table_row(
-                "manual",
+                source_label,
                 roi.get("manual_roi_id", idx + 1),
                 roi.get("roi_type", "manual"),
                 "final",
@@ -1270,6 +1309,17 @@ class CurationWindow(QMainWindow):
             if 0 <= int(idx) < len(self.roi_cache) and self.suite2p_ref_visible(int(idx))
         }
 
+    def valid_candidate_cellpose_selection(self) -> set[int]:
+        return {
+            int(idx)
+            for idx in self.selected_candidate_cellpose_refs
+            if 0 <= int(idx) < len(self.cellpose_cache)
+        }
+
+    def clear_candidate_selection(self) -> None:
+        self.clear_candidate_selection()
+        self.selected_candidate_cellpose_refs = set()
+
     @staticmethod
     def rect_intersects_points(
         x_values: np.ndarray,
@@ -1289,7 +1339,7 @@ class CurationWindow(QMainWindow):
         )
 
     def clear_canvas_selection(self) -> None:
-        self.selected_candidate_suite2p_refs = set()
+        self.clear_candidate_selection()
         self.selected_roi = None
         self.selected_manual_roi = None
         self.roi_table.clearSelection()
@@ -1298,7 +1348,7 @@ class CurationWindow(QMainWindow):
         self.refresh()
         self.update_trace_plot()
 
-    def set_candidate_suite2p_selection(self, indices: set[int], mode: str = "replace") -> None:
+    def set_candidate_suite2p_selection(self, indices: set[int], mode: str = "replace", refresh: bool = True) -> None:
         valid = {
             int(idx)
             for idx in indices
@@ -1314,8 +1364,28 @@ class CurationWindow(QMainWindow):
             self.selected_roi = sorted(self.selected_candidate_suite2p_refs)[-1]
             self.selected_manual_roi = None
             self.roi_table.clearSelection()
+            if mode != "add":
+                self.selected_candidate_cellpose_refs = set()
         else:
             self.selected_roi = None
+        if refresh:
+            self.invalidate_overlay_cache()
+            self.refresh()
+            self.update_trace_plot()
+
+    def set_candidate_cellpose_selection(self, indices: set[int], mode: str = "replace") -> None:
+        valid = {int(idx) for idx in indices if 0 <= int(idx) < len(self.cellpose_cache)}
+        if mode == "toggle":
+            self.selected_candidate_cellpose_refs ^= valid
+        elif mode == "add":
+            self.selected_candidate_cellpose_refs |= valid
+        else:
+            self.selected_candidate_cellpose_refs = valid
+            self.selected_candidate_suite2p_refs = set()
+        if self.selected_candidate_cellpose_refs:
+            self.selected_roi = None
+            self.selected_manual_roi = None
+            self.roi_table.clearSelection()
         self.invalidate_overlay_cache()
         self.refresh()
         self.update_trace_plot()
@@ -1349,7 +1419,7 @@ class CurationWindow(QMainWindow):
         else:
             self.selected_roi = None
             self.selected_manual_roi = None
-        self.selected_candidate_suite2p_refs = set()
+        self.clear_candidate_selection()
 
     def set_final_entry_selection(self, entry: tuple[str, int], additive: bool = False) -> None:
         current = set(self.selected_final_entries()) if additive else set()
@@ -1358,7 +1428,7 @@ class CurationWindow(QMainWindow):
         else:
             current.add(entry)
         self.select_final_entries(sorted(current))
-        self.selected_candidate_suite2p_refs = set()
+        self.clear_candidate_selection()
         self.invalidate_overlay_cache()
         self.refresh()
         self.update_trace_plot()
@@ -1367,7 +1437,7 @@ class CurationWindow(QMainWindow):
         entries = [("suite2p", idx) for idx in sorted(self.selected_suite2p_refs)]
         entries.extend(("manual", idx) for idx in range(len(self.added_rois)))
         self.select_final_entries(entries)
-        self.selected_candidate_suite2p_refs = set()
+        self.clear_candidate_selection()
         self.invalidate_overlay_cache()
         self.status.showMessage(f"Selected {len(entries)} final ROI(s)")
         self.refresh()
@@ -1415,6 +1485,13 @@ class CurationWindow(QMainWindow):
         self.show_suite2p_refs = self.show_suite2p.isChecked()
         if self.show_suite2p_refs and not self.suite2p_loaded:
             self.load_suite2p_refs()
+        self.invalidate_overlay_cache()
+        self.refresh()
+
+    def toggle_cellpose_refs(self) -> None:
+        self.show_cellpose_refs = self.show_cellpose.isChecked()
+        if self.show_cellpose_refs and not self.cellpose_loaded:
+            self.load_cellpose_refs()
         self.invalidate_overlay_cache()
         self.refresh()
 
@@ -1603,6 +1680,20 @@ class CurationWindow(QMainWindow):
         self.suite2p_loaded = True
         self.status.showMessage(f"Loaded {len(self.stat)} suite2p reference ROIs")
         self.populate_roi_list()
+
+    def load_cellpose_refs(self) -> None:
+        stat_path = cellpose_plane_dir(self.data_root, self.paths.rel_parent, self.paths.trial_id) / "cellpose_stat.npy"
+        if not stat_path.exists():
+            self.show_cellpose.blockSignals(True)
+            self.show_cellpose.setChecked(False)
+            self.show_cellpose.blockSignals(False)
+            self.show_cellpose_refs = False
+            QMessageBox.warning(self, "cellpose refs", "No Cellpose ROI output was found for this trial.")
+            return
+        stat = np.load(stat_path, allow_pickle=True)
+        self.cellpose_cache = self.normalize_candidate_cache(stat)
+        self.cellpose_loaded = True
+        self.status.showMessage(f"Loaded {len(self.cellpose_cache)} Cellpose reference ROIs")
 
     def load_saved_curation_if_present(self) -> None:
         out_dir = self.paths.output_dir
@@ -1874,13 +1965,15 @@ class CurationWindow(QMainWindow):
         self.Fneu = None
         self.suite2p_loaded = False
         self.suite2p_ref_flags = np.zeros((0,), dtype=bool)
+        self.cellpose_loaded = False
+        self.cellpose_cache = []
         self.movie = movie_as_tyx(paths.movie_path)
         self.load_trace_movie_for_trial(paths)
         self.refresh_acquisition_fps(paths)
         self.frame_index = 0
         self.selected_roi = None
         self.selected_manual_roi = None
-        self.selected_candidate_suite2p_refs = set()
+        self.clear_candidate_selection()
         self.selection_box_start = None
         self.selection_box_current = None
         self.selection_box_target = None
@@ -1888,6 +1981,10 @@ class CurationWindow(QMainWindow):
         self.show_suite2p.blockSignals(True)
         self.show_suite2p.setChecked(False)
         self.show_suite2p.blockSignals(False)
+        self.show_cellpose_refs = False
+        self.show_cellpose.blockSignals(True)
+        self.show_cellpose.setChecked(False)
+        self.show_cellpose.blockSignals(False)
         self.selected_suite2p_refs = set()
         self.added_rois = []
         self.removed_rois = []
@@ -2026,20 +2123,20 @@ class CurationWindow(QMainWindow):
         self.selected_removed_roi = int(idx)
         self.selected_roi = None
         self.selected_manual_roi = None
-        self.selected_candidate_suite2p_refs = set()
+        self.clear_candidate_selection()
         self.roi_table.clearSelection()
         self.status.showMessage("Selected removed ROI; Restore removed will put it back in the final ROI table")
 
     def handle_overlay_click(self, x: float, y: float, button: int) -> None:
         if (
             button == Qt.MouseButton.LeftButton
-            and self.show_suite2p_refs
+            and (self.show_suite2p_refs or self.show_cellpose_refs)
             and QApplication.keyboardModifiers() & Qt.KeyboardModifier.ShiftModifier
         ):
             self.selection_box_start = (float(x), float(y))
             self.selection_box_current = (float(x), float(y))
-            self.selection_box_target = "suite2p_refs"
-            self.status.showMessage("Drag to box-select suite2p candidate ROIs")
+            self.selection_box_target = "candidate_refs"
+            self.status.showMessage("Drag to box-select candidate ROIs")
             self.refresh()
             return
         manual_idx = self.manual_roi_at(x, y)
@@ -2055,24 +2152,27 @@ class CurationWindow(QMainWindow):
                 )
                 self.status.showMessage(f"Selected manual ROI {self.added_rois[manual_idx]['manual_roi_id']}")
             return
-        if not self.show_suite2p_refs:
+        if not self.show_suite2p_refs and not self.show_cellpose_refs:
             if button == Qt.MouseButton.LeftButton:
                 self.clear_canvas_selection()
             return
-        best_idx, best_dist = self.nearest_existing_roi(x, y)
+        best_source, best_idx, best_dist = self.nearest_candidate_roi(x, y)
         if button == Qt.MouseButton.RightButton:
-            if best_idx is not None and best_dist <= 100:
+            if best_source == "suite2p" and best_idx is not None and best_dist <= 100:
                 if self.remove_picked_suite2p_roi(best_idx):
                     self.status.showMessage(f"Removed suite2p ROI {best_idx} from picked refs")
             return
         if best_idx is not None and best_dist <= 100:
             if button == Qt.MouseButton.LeftButton:
-                self.set_candidate_suite2p_selection(
-                    {best_idx},
-                    mode="toggle" if self.additive_selection_requested() else "replace",
-                )
-                count = len(self.valid_candidate_suite2p_selection())
-                self.status.showMessage(f"Selected {count} suite2p candidate ROI(s)")
+                mode = "toggle" if self.additive_selection_requested() else "replace"
+                if best_source == "suite2p":
+                    self.set_candidate_suite2p_selection({best_idx}, mode=mode)
+                    count = len(self.valid_candidate_suite2p_selection())
+                    self.status.showMessage(f"Selected {count} suite2p candidate ROI(s)")
+                elif best_source == "cellpose":
+                    self.set_candidate_cellpose_selection({best_idx}, mode=mode)
+                    count = len(self.valid_candidate_cellpose_selection())
+                    self.status.showMessage(f"Selected {count} cellpose candidate ROI(s)")
             return
         if button == Qt.MouseButton.LeftButton:
             self.clear_canvas_selection()
@@ -2080,16 +2180,19 @@ class CurationWindow(QMainWindow):
 
 
     def handle_overlay_double_click(self, x: float, y: float, button: object) -> None:
-        if not self.show_suite2p_refs or button != Qt.MouseButton.LeftButton:
+        if (not self.show_suite2p_refs and not self.show_cellpose_refs) or button != Qt.MouseButton.LeftButton:
             return
-        best_idx, best_dist = self.nearest_existing_roi(x, y)
+        best_source, best_idx, best_dist = self.nearest_candidate_roi(x, y)
         if best_idx is None or best_dist > 100:
             return
-        self.selected_roi = best_idx
-        self.selected_manual_roi = None
-        self.selected_candidate_suite2p_refs = {best_idx} if best_idx not in self.selected_suite2p_refs else set()
-        self.set_selected_state(1 if best_idx not in self.selected_suite2p_refs else 0)
-        self.status.showMessage(f"Toggled suite2p ROI {best_idx}")
+        if best_source == "suite2p":
+            self.selected_roi = best_idx
+            self.selected_manual_roi = None
+            self.selected_candidate_suite2p_refs = {best_idx} if best_idx not in self.selected_suite2p_refs else set()
+            self.set_selected_state(1 if best_idx not in self.selected_suite2p_refs else 0)
+            self.status.showMessage(f"Toggled suite2p ROI {best_idx}")
+        elif best_source == "cellpose" and self.add_cellpose_candidate_to_final(best_idx):
+            self.status.showMessage(f"Added cellpose ROI {best_idx} to final set")
 
     def suite2p_ref_entries_in_box(
         self,
@@ -2112,7 +2215,7 @@ class CurationWindow(QMainWindow):
 
     def handle_overlay_drag(self, x: float, y: float, buttons: object) -> None:
         if (
-            self.selection_box_target == "suite2p_refs"
+            self.selection_box_target == "candidate_refs"
             and self.selection_box_start is not None
             and (buttons & Qt.MouseButton.LeftButton)
         ):
@@ -2121,18 +2224,20 @@ class CurationWindow(QMainWindow):
 
     def handle_overlay_release(self, x: float, y: float, button: object) -> None:
         if (
-            self.selection_box_target == "suite2p_refs"
+            self.selection_box_target == "candidate_refs"
             and button == Qt.MouseButton.LeftButton
             and self.selection_box_start is not None
         ):
             self.selection_box_current = (float(x), float(y))
-            indices = self.suite2p_ref_entries_in_box(self.selection_box_start, self.selection_box_current)
+            suite2p_indices, cellpose_indices = self.candidate_entries_in_box(self.selection_box_start, self.selection_box_current)
             mode = "add" if self.additive_selection_requested() else "replace"
             self.selection_box_start = None
             self.selection_box_current = None
             self.selection_box_target = None
-            self.set_candidate_suite2p_selection(indices, mode=mode)
-            self.status.showMessage(f"Selected {len(self.valid_candidate_suite2p_selection())} suite2p candidate ROI(s)")
+            self.set_candidate_suite2p_selection(suite2p_indices, mode=mode, refresh=False)
+            self.set_candidate_cellpose_selection(cellpose_indices, mode="add" if mode == "add" or suite2p_indices else "replace")
+            total = len(self.valid_candidate_suite2p_selection()) + len(self.valid_candidate_cellpose_selection())
+            self.status.showMessage(f"Selected {total} candidate ROI(s)")
 
     def nearest_existing_roi(self, x: float, y: float) -> tuple[int | None, float]:
         best_idx = None
@@ -2149,6 +2254,44 @@ class CurationWindow(QMainWindow):
                 best_dist = dist
                 best_idx = idx
         return best_idx, best_dist
+
+    def nearest_candidate_roi(self, x: float, y: float) -> tuple[str | None, int | None, float]:
+        best_source: str | None = None
+        best_idx: int | None = None
+        best_dist = float("inf")
+        if self.show_suite2p_refs:
+            idx, dist = self.nearest_existing_roi(x, y)
+            if idx is not None and dist < best_dist:
+                best_source, best_idx, best_dist = "suite2p", idx, dist
+        if self.show_cellpose_refs:
+            for idx, roi in enumerate(self.cellpose_cache):
+                ypix = np.asarray(roi.get("ypix", []), dtype=float)
+                xpix = np.asarray(roi.get("xpix", []), dtype=float)
+                if ypix.size == 0:
+                    continue
+                dist = float(np.min((xpix - x) ** 2 + (ypix - y) ** 2))
+                if dist < best_dist:
+                    best_source, best_idx, best_dist = "cellpose", idx, dist
+        return best_source, best_idx, best_dist
+
+    def candidate_entries_in_box(
+        self,
+        start: tuple[float, float],
+        end: tuple[float, float],
+    ) -> tuple[set[int], set[int]]:
+        suite2p_indices = self.suite2p_ref_entries_in_box(start, end) if self.show_suite2p_refs else set()
+        x0, y0 = start
+        x1, y1 = end
+        xmin, xmax = sorted((float(x0), float(x1)))
+        ymin, ymax = sorted((float(y0), float(y1)))
+        cellpose_indices: set[int] = set()
+        if self.show_cellpose_refs:
+            for idx, roi in enumerate(self.cellpose_cache):
+                xpix = np.asarray(roi.get("xpix", []), dtype=float)
+                ypix = np.asarray(roi.get("ypix", []), dtype=float)
+                if self.rect_intersects_points(xpix, ypix, xmin, xmax, ymin, ymax):
+                    cellpose_indices.add(int(idx))
+        return suite2p_indices, cellpose_indices
 
     def nearest_selected_suite2p_roi(self, x: float, y: float) -> tuple[int | None, float]:
         best_idx = None
@@ -2414,17 +2557,24 @@ class CurationWindow(QMainWindow):
             exclusion |= polygon_mask(points, shape)
         return exclusion
 
-    def build_manual_roi(self, mask: np.ndarray, exclude_manual_idx: int | None = None) -> dict:
+    def build_manual_roi(
+        self,
+        mask: np.ndarray,
+        exclude_manual_idx: int | None = None,
+        points: list[tuple[float, float]] | None = None,
+        roi_type: str | None = None,
+        extra: dict | None = None,
+    ) -> dict:
         ypix, xpix = np.nonzero(mask)
         f, fneu, fcorr, dff, f0, neuropil_pixels = self.traces_for_mask(
             mask,
             exclusion_mask=self.final_roi_exclusion_mask(mask.shape, exclude_manual_idx=exclude_manual_idx),
         )
-        return {
+        roi = {
             "manual_roi_id": self.next_manual_roi_id(),
-            "roi_type": "ellipse" if self.mode_combo.currentText() == "draw ellipse ROI" else "freehand",
+            "roi_type": roi_type or ("ellipse" if self.mode_combo.currentText() == "draw ellipse ROI" else "freehand"),
             "status": "accepted",
-            "points": [[float(x), float(y)] for x, y in self.current_polygon],
+            "points": [[float(x), float(y)] for x, y in (points if points is not None else self.current_polygon)],
             "frame_added": int(self.frame_index),
             "n_pixels": int(mask.sum()),
             "x_mean": float(np.mean(xpix)),
@@ -2447,6 +2597,9 @@ class CurationWindow(QMainWindow):
             "_trace_F_corrected": fcorr.astype(float).tolist(),
             "_trace_dff": dff.astype(float).tolist(),
         }
+        if extra:
+            roi.update(extra)
+        return roi
 
     def traces_for_mask(
         self,
@@ -2479,6 +2632,58 @@ class CurationWindow(QMainWindow):
         mask[ypix[valid], xpix[valid]] = True
         return mask
 
+    def cellpose_mask(self, roi_idx: int) -> np.ndarray:
+        mask = np.zeros(self.trace_movie.shape[-2:], dtype=bool)
+        if roi_idx < 0 or roi_idx >= len(self.cellpose_cache):
+            return mask
+        roi = self.cellpose_cache[roi_idx]
+        ypix = np.asarray(roi.get("ypix", []), dtype=int)
+        xpix = np.asarray(roi.get("xpix", []), dtype=int)
+        valid = (
+            (ypix >= 0)
+            & (ypix < mask.shape[0])
+            & (xpix >= 0)
+            & (xpix < mask.shape[1])
+        )
+        mask[ypix[valid], xpix[valid]] = True
+        return mask
+
+    def cellpose_points(self, roi_idx: int) -> list[tuple[float, float]]:
+        if roi_idx < 0 or roi_idx >= len(self.cellpose_cache):
+            return []
+        roi = self.cellpose_cache[roi_idx]
+        ypix = np.asarray(roi.get("boundary_ypix", roi.get("ypix", [])), dtype=np.int32)
+        xpix = np.asarray(roi.get("boundary_xpix", roi.get("xpix", [])), dtype=np.int32)
+        return ordered_boundary_points(ypix, xpix)
+
+    def add_cellpose_candidate_to_final(self, roi_idx: int) -> bool:
+        mask = self.cellpose_mask(roi_idx)
+        if not np.any(mask):
+            return False
+        self.push_undo("cellpose-pick")
+        points = self.cellpose_points(roi_idx)
+        roi = self.build_manual_roi(
+            mask,
+            points=points,
+            roi_type="cellpose",
+            extra={
+                "roi_source": "cellpose",
+                "cellpose_original_id": int(roi_idx),
+            },
+        )
+        self.added_rois.append(roi)
+        self.selected_manual_roi = len(self.added_rois) - 1
+        self.selected_roi = None
+        self.selected_candidate_cellpose_refs.discard(int(roi_idx))
+        self.selected_removed_roi = None
+        self.mark_manual_traces_dirty()
+        self.invalidate_overlay_cache()
+        self.dirty = True
+        self.populate_roi_list()
+        self.refresh()
+        self.update_trace_plot()
+        return True
+
     def mean_trace(self, mask: np.ndarray) -> np.ndarray:
         trace_movie = self.trace_movie
         if trace_movie.shape[-2:] != mask.shape:
@@ -2489,6 +2694,16 @@ class CurationWindow(QMainWindow):
         return np.asarray(np.nanmean(pixels, axis=1), dtype=np.float32)
 
     def set_selected_state(self, state: int) -> None:
+        cellpose_indices = sorted(self.valid_candidate_cellpose_selection())
+        if state and cellpose_indices:
+            added = 0
+            for roi_idx in cellpose_indices:
+                if self.add_cellpose_candidate_to_final(int(roi_idx)):
+                    added += 1
+            self.clear_candidate_selection()
+            self.status.showMessage(f"Added {added} cellpose candidate ROI(s) to final set")
+            return
+
         candidate_indices = sorted(self.valid_candidate_suite2p_selection())
         if state and candidate_indices:
             self.push_undo("suite2p-pick-batch")
@@ -2497,7 +2712,7 @@ class CurationWindow(QMainWindow):
                 if 0 <= roi_idx < len(self.iscell):
                     self.iscell[roi_idx, 0] = 1.0
                     self.iscell[roi_idx, 1] = 1.0
-            self.selected_candidate_suite2p_refs = set()
+            self.clear_candidate_selection()
             self.selected_roi = candidate_indices[-1]
             self.selected_manual_roi = None
             self.mark_manual_traces_dirty()
@@ -2660,6 +2875,7 @@ class CurationWindow(QMainWindow):
                 "label": label,
                 "iscell": self.iscell.copy(),
                 "selected_candidate_suite2p_refs": set(self.selected_candidate_suite2p_refs),
+                "selected_candidate_cellpose_refs": set(self.selected_candidate_cellpose_refs),
                 "selected_suite2p_refs": set(self.selected_suite2p_refs),
                 "added_rois": copy.deepcopy(self.added_rois),
                 "removed_rois": copy.deepcopy(self.removed_rois),
@@ -2680,6 +2896,7 @@ class CurationWindow(QMainWindow):
         state = self.undo_stack.pop()
         self.iscell = state["iscell"]
         self.selected_candidate_suite2p_refs = state.get("selected_candidate_suite2p_refs", set())
+        self.selected_candidate_cellpose_refs = state.get("selected_candidate_cellpose_refs", set())
         self.selected_suite2p_refs = state["selected_suite2p_refs"]
         self.added_rois = state["added_rois"]
         self.removed_rois = state["removed_rois"]
@@ -2750,11 +2967,13 @@ class CurationWindow(QMainWindow):
             view,
             self._roi_overlay_revision,
             bool(self.show_suite2p_refs),
+            bool(self.show_cellpose_refs),
             bool(self.show_suite2p_iscell0.isChecked()),
             bool(self.show_final_rois.isChecked()),
             self.selected_roi,
             self.selected_manual_roi,
             tuple(sorted(self.valid_candidate_suite2p_selection())),
+            tuple(sorted(self.valid_candidate_cellpose_selection())),
             tuple(sorted(self.selected_suite2p_refs)),
             len(self.added_rois),
         )
@@ -2769,6 +2988,7 @@ class CurationWindow(QMainWindow):
         painter = QPainter(overlay)
         if view == "reference":
             self.paint_suite2p_rois(painter, selected_only=False)
+            self.paint_cellpose_rois(painter)
         elif view == "edit":
             self.paint_suite2p_rois(painter, selected_only=True)
         if view != "edit" or self.show_final_rois.isChecked():
@@ -2816,6 +3036,24 @@ class CurationWindow(QMainWindow):
             for y, x in zip(ypix, xpix):
                 painter.drawPoint(int(x), int(y))
 
+    def paint_cellpose_rois(self, painter: QPainter) -> None:
+        if not self.show_cellpose_refs:
+            return
+        selected = self.valid_candidate_cellpose_selection()
+        for idx, roi in enumerate(self.cellpose_cache):
+            ypix = np.asarray(roi.get("boundary_ypix", []), dtype=np.int32)
+            xpix = np.asarray(roi.get("boundary_xpix", []), dtype=np.int32)
+            if ypix.size == 0:
+                continue
+            color = QColor(210, 80, 255, 140)
+            if idx in selected:
+                color = QColor(255, 220, 0, 255)
+            pen = QPen(color)
+            pen.setWidth(1)
+            painter.setPen(pen)
+            for y, x in zip(ypix, xpix):
+                painter.drawPoint(int(x), int(y))
+
     def paint_added_rois(self, painter: QPainter) -> None:
         _, selected_manual = self.selected_final_sets()
         pen = QPen(QColor(0, 180, 255, 230))
@@ -2847,7 +3085,7 @@ class CurationWindow(QMainWindow):
     def paint_selection_box(self, painter: QPainter, view: str) -> None:
         if self.selection_box_start is None or self.selection_box_current is None:
             return
-        if self.selection_box_target == "suite2p_refs" and view != "reference":
+        if self.selection_box_target in {"suite2p_refs", "candidate_refs"} and view != "reference":
             return
         if self.selection_box_target == "final" and view != "edit":
             return
@@ -2886,6 +3124,12 @@ class CurationWindow(QMainWindow):
                 ypix = np.asarray(roi.get("ypix", []), dtype=float)
                 if xpix.size:
                     candidates.append(("suite2p", idx, float(np.mean(xpix)), float(np.mean(ypix))))
+        if self.show_cellpose_refs:
+            for idx, roi in enumerate(self.cellpose_cache):
+                xpix = np.asarray(roi.get("xpix", []), dtype=float)
+                ypix = np.asarray(roi.get("ypix", []), dtype=float)
+                if xpix.size:
+                    candidates.append(("cellpose", idx, float(np.mean(xpix)), float(np.mean(ypix))))
         for idx, roi in enumerate(self.added_rois):
             candidates.append(("manual", idx, float(roi.get("x_mean", 0.0)), float(roi.get("y_mean", 0.0))))
         return candidates
@@ -2900,6 +3144,14 @@ class CurationWindow(QMainWindow):
             ypix = np.asarray(roi.get("ypix", []), dtype=float)
             if xpix.size:
                 return float(np.mean(xpix)), float(np.mean(ypix))
+        if self.selected_candidate_cellpose_refs:
+            idx = sorted(self.selected_candidate_cellpose_refs)[-1]
+            if 0 <= idx < len(self.cellpose_cache):
+                roi = self.cellpose_cache[idx]
+                xpix = np.asarray(roi.get("xpix", []), dtype=float)
+                ypix = np.asarray(roi.get("ypix", []), dtype=float)
+                if xpix.size:
+                    return float(np.mean(xpix)), float(np.mean(ypix))
         candidates = self.roi_center_candidates()
         if candidates:
             _, _, x, y = candidates[0]
@@ -2914,6 +3166,8 @@ class CurationWindow(QMainWindow):
         best: tuple[float, str, int] | None = None
         for kind, idx, x, y in self.roi_center_candidates():
             if kind == "suite2p" and self.selected_roi == idx:
+                continue
+            if kind == "cellpose" and idx in self.selected_candidate_cellpose_refs:
                 continue
             if kind == "manual" and self.selected_manual_roi == idx:
                 continue
@@ -2938,9 +3192,23 @@ class CurationWindow(QMainWindow):
         if kind == "suite2p":
             self.selected_roi = idx
             self.selected_manual_roi = None
+            if idx in self.selected_suite2p_refs:
+                self.select_final_entries([("suite2p", idx)])
+            else:
+                self.selected_candidate_suite2p_refs = {idx}
+                self.selected_candidate_cellpose_refs = set()
+                self.roi_table.clearSelection()
+        elif kind == "cellpose":
+            self.selected_roi = None
+            self.selected_manual_roi = None
+            self.selected_candidate_suite2p_refs = set()
+            self.selected_candidate_cellpose_refs = {idx}
+            self.roi_table.clearSelection()
         else:
             self.selected_roi = None
             self.selected_manual_roi = idx
+            self.select_final_entries([("manual", idx)])
+        self.invalidate_overlay_cache()
         self.refresh()
         self.update_trace_plot()
 
@@ -3100,13 +3368,21 @@ class CurationWindow(QMainWindow):
                     mask = polygon_mask(points, self.movie.shape[-2:])
                     stat_entry = stat_dict_from_mask(mask, int(roi["manual_roi_id"]))
                     previous_suite2p_id = roi.get("suite2p_original_id")
+                    roi_source = "cellpose" if roi.get("roi_source") == "cellpose" else "manual"
+                    source_roi_id = (
+                        f"cellpose_{int(roi.get('cellpose_original_id', roi['manual_roi_id']))}"
+                        if roi_source == "cellpose"
+                        else f"manual_{int(roi['manual_roi_id'])}"
+                    )
                     stat_entry.update(
                         {
-                            "roi_source": "manual",
+                            "roi_source": roi_source,
                             "roi_type": str(roi.get("roi_type", "manual")),
-                            "source_roi_id": f"manual_{int(roi['manual_roi_id'])}",
+                            "source_roi_id": source_roi_id,
                         }
                     )
+                    if roi_source == "cellpose":
+                        stat_entry["cellpose_original_id"] = int(roi.get("cellpose_original_id", -1))
                     if previous_suite2p_id is not None:
                         try:
                             stat_entry["previous_suite2p_original_id"] = int(previous_suite2p_id)
@@ -3131,8 +3407,12 @@ class CurationWindow(QMainWindow):
                     {
                         **clean,
                         "roi_id": f"manual_{roi['manual_roi_id']}",
-                        "roi_source": "manual",
-                        "source_roi_id": f"manual_{roi['manual_roi_id']}",
+                        "roi_source": "cellpose" if roi.get("roi_source") == "cellpose" else "manual",
+                        "source_roi_id": (
+                            f"cellpose_{int(roi.get('cellpose_original_id', roi['manual_roi_id']))}"
+                            if roi.get("roi_source") == "cellpose"
+                            else f"manual_{roi['manual_roi_id']}"
+                        ),
                     }
                 )
             n_frames = len(roi.get("_trace_F", []))

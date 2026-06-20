@@ -37,8 +37,9 @@ GUI 会在各步骤输出文件夹下递归搜索 movie 和 suite2p 结果，所
 - `Display` 里的 `black` / `white` 类似 Fiji 的 brightness/contrast：只改变画面显示，不改变原始 movie，也不改变 trace。
 - `Date` / `Trial`：先选择日期，再从当天 trial 下拉框里选择文件。`all dates` 会显示所有 trial，并在 trial 名前带上日期。可以点 `Load selected` 打开选中的 trial，也可以点 `Next` 切到当前日期下的下一个 trial。
 - 右侧控制区可以上下滚动，屏幕较小时按钮不会被挤出窗口。
-- 左边窗口：默认只显示视频，不显示 suite2p ROI。
+- 左边窗口：默认只显示视频，不显示候选 ROI。
 - `show suite2p refs`：需要参考 suite2p 时再打开；打开时才读取 suite2p ROI。默认只显示当前 suite2p 自己标成 `iscell=1` 的 ROI 候选；勾选 `show current suite2p iscell=0 refs` 后，也会显示当前 suite2p 输出里仍然存在、但标成 `iscell=0` 的候选。未选中的参考 ROI 是较细的半透明橙色，选中的参考 ROI 是绿色，当前查看的是黄色。
+- `show cellpose refs`：单独显示 Cellpose 候选 ROI。Cellpose 候选和 suite2p 候选使用同一套选择规则：单击选中、`Shift` 拖框多选、双击加入最终 ROI set。
 - `show current suite2p iscell=0 refs`：只控制当前 suite2p 原始 `iscell=0` 候选是否显示；这只是 suite2p 给当前候选库的 label，不是人工校对结果里的状态。旧保存里有、但当前 suite2p 候选库里已经没有对应形状的 ROI 不属于这里，会作为 `source=manual` 载入。
 - `show final ROIs on right`：只控制右边最终 ROI set 是否显示。关掉后，右边会只显示底片和当前正在画的线；已选 ROI 不会丢，只是暂时隐藏。
 - 右边窗口：显示最终会保存的 ROI，也就是手画 ROI 和已经选中的 suite2p ROI。
@@ -54,26 +55,27 @@ GUI 会在各步骤输出文件夹下递归搜索 movie 和 suite2p 结果，所
 
 Trace 来源：
 
-- suite2p 候选 ROI 和手画 ROI 的 trace 都按 ROI 形状从 motion-corrected movie 重新计算；如果没有 `03_motion_correct`，才回退到当前显示底片。
+- suite2p 候选 ROI、Cellpose 候选 ROI 和手画 ROI 的 trace 都按 ROI 形状从 motion-corrected movie 重新计算；如果没有 `03_motion_correct`，才回退到当前显示底片。
 - 因此 05 默认也使用 motion-corrected movie 生成 suite2p 候选；spatial high-pass 主要作为 GUI 中辅助查看边界的显示底片。
 - 因此切换当前显示的 `Movie source` 或调 brightness/contrast，只影响你看图，不会改变 trace。
 
-## 怎么从 suite2p 里捡 ROI
+## 怎么从候选库里捡 ROI
 
-1. 打开 `show suite2p refs`。
-2. 在左边视频里单击一个 suite2p ROI，可以查看它的 trace。
-3. 双击这个 suite2p ROI，才会加入/移出最终人工 ROI set。
-4. 最后只有被选中的 suite2p ROI 会保存；其他 suite2p ROI 都不会进入后续分析。
+1. 打开 `show suite2p refs` 或 `show cellpose refs`，也可以两个都打开。
+2. 在左边视频里单击一个候选 ROI，可以查看/高亮它。
+3. 双击这个候选 ROI，才会加入最终人工 ROI set。
+4. 最后只有加入最终 ROI set 的候选 ROI 会保存；其他候选 ROI 都不会进入后续分析。
 
 这个操作不会改 suite2p 原始文件，只会另存一个新的人工 ROI set。
 
-选中的 suite2p ROI 会出现在右边窗口，即使左边的 `show suite2p refs` 关掉也会保留显示。右边也可以点选这些 ROI，右键可以从最终 ROI set 里移除。右边手画的 ROI 也可以右键直接删除；右键会直接处理点到的 ROI，不需要先选中，也不需要先切回 `select ROI` 模式。
+选中的 suite2p / Cellpose ROI 会出现在右边窗口，即使左边的参考层关掉也会保留显示。右边也可以点选这些 ROI，右键可以从最终 ROI set 里移除。右边手画的 ROI 也可以右键直接删除；右键会直接处理点到的 ROI，不需要先选中，也不需要先切回 `select ROI` 模式。
 
 如果关掉 `show final ROIs on right`，右边已有 ROI 会暂时隐藏，鼠标也不会点中这些隐藏 ROI，避免误删。
 
 最终 ROI set 里的 ROI 一视同仁，只有来源不同：
 
 - `source=suite2p`：来自 suite2p 候选，保留 suite2p 原始 index。
+- `source=cellpose`：来自 Cellpose 候选，保留 Cellpose 原始 index。
 - `source=manual`：手画 ROI，或 suite2p 重跑后旧保存 ROI 被导入为 manual，保留 manual ROI index。
 - `Remove selected` / `Delete selected`：把当前选中的一个或多个 ROI 从最终 ROI set 移除，不修改 suite2p 原始输出。
 - `Restore removed`：把本次临时移除的一个或多个 ROI 放回最终 ROI set。

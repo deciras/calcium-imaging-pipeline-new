@@ -53,6 +53,7 @@ STEP_ROWS: tuple[tuple[str, str], ...] = (
     ("03", "CaImAn motion correction"),
     ("04", "spatial high-pass"),
     ("05", "suite2p ROI detection"),
+    ("cellpose", "cellpose ROI segmentation"),
     ("manual", "manual ROI curation GUI"),
     ("06", "extract dF/F"),
     ("07", "detect calcium events"),
@@ -311,7 +312,7 @@ class PipelineDashboard(QMainWindow):
             self.update_command_preview()
             return
         group_steps = {
-            "premanual": {"00", "01", "02", "03", "04", "05"},
+            "premanual": {"00", "01", "02", "03", "04", "05", "cellpose"},
             "manual": {"manual"},
             "basic-analysis": {"06", "07", "08", "09"},
             "core-analysis": {"06", "08", "09", "trace", "10", "12"},
