@@ -14,9 +14,9 @@ from __future__ import annotations
 import argparse
 import copy
 import json
-import platform
 import struct
 import sys
+import time
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMessageBox,
+    QProgressDialog,
     QPushButton,
     QScrollArea,
     QSlider,
@@ -847,6 +848,8 @@ class CurationWindow(QMainWindow):
         self._roi_overlay_revision = 0
         self._manual_traces_dirty = False
         self._trace_pause_notice_shown = False
+        self._last_preview_refresh_at = 0.0
+        self._preview_refresh_interval = 1.0 / 30.0
 
         self.setWindowTitle(f"ROI curation - {paths.trial_id}")
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -890,7 +893,7 @@ class CurationWindow(QMainWindow):
         self.speed_spin.setRange(0.05, 100.0)
         self.speed_spin.setDecimals(2)
         self.speed_spin.setSingleStep(0.25)
-        self.speed_spin.setValue(1.0)
+        self.speed_spin.setValue(60.0)
         self.speed_spin.setSuffix(" x")
         self.speed_spin.valueChanged.connect(self.update_play_timer_interval)
 
@@ -898,11 +901,14 @@ class CurationWindow(QMainWindow):
         self.fps_spin.setRange(0.1, 240.0)
         self.fps_spin.setDecimals(1)
         self.fps_spin.setSingleStep(1.0)
-        self.fps_spin.setValue(10.0)
+        self.fps_spin.setValue(120.0)
         self.fps_spin.setSuffix(" fps")
         self.fps_spin.valueChanged.connect(self.update_play_timer_interval)
 
         self.playback_info_label = QLabel("")
+        display_fps_index = self.playback_mode_combo.findData("fps")
+        if display_fps_index >= 0:
+            self.playback_mode_combo.setCurrentIndex(display_fps_index)
         self.update_playback_controls()
 
         self.black_spin = QDoubleSpinBox()
@@ -947,7 +953,7 @@ class CurationWindow(QMainWindow):
         self.render_scale_spin.setSingleStep(0.25)
         self.render_scale_spin.setSuffix(" x")
         self.render_scale_spin.setToolTip("Lower values render faster but blurrier; 1.00 keeps full display detail.")
-        self.render_scale_spin.setValue(0.75 if platform.system() == "Linux" else 1.0)
+        self.render_scale_spin.setValue(1.0)
         self.render_scale_spin.valueChanged.connect(self.update_render_scale)
 
         self.fast_play_single_view = QCheckBox("play left only")
@@ -1187,6 +1193,30 @@ class CurationWindow(QMainWindow):
         self.invalidate_all_image_caches()
         self.status.showMessage("Cleared image cache")
         self.refresh()
+
+    def begin_busy(self, message: str) -> QProgressDialog:
+        dialog = QProgressDialog(message, "", 0, 0, self)
+        dialog.setCancelButton(None)
+        dialog.setWindowModality(Qt.WindowModality.WindowModal)
+        dialog.setMinimumDuration(0)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        dialog.show()
+        QApplication.processEvents()
+        return dialog
+
+    @staticmethod
+    def end_busy(dialog: QProgressDialog) -> None:
+        QApplication.restoreOverrideCursor()
+        dialog.close()
+        dialog.deleteLater()
+        QApplication.processEvents()
+
+    def preview_refresh_due(self) -> bool:
+        now = time.monotonic()
+        if now - self._last_preview_refresh_at < self._preview_refresh_interval:
+            return False
+        self._last_preview_refresh_at = now
+        return True
 
     def mark_manual_traces_dirty(self) -> None:
         self._manual_traces_dirty = True
@@ -1466,7 +1496,7 @@ class CurationWindow(QMainWindow):
             self.refresh()
             self.update_trace_plot()
 
-    def set_candidate_cellpose_selection(self, indices: set[int], mode: str = "replace") -> None:
+    def set_candidate_cellpose_selection(self, indices: set[int], mode: str = "replace", refresh: bool = True) -> None:
         valid = {
             int(idx)
             for idx in indices
@@ -1483,9 +1513,10 @@ class CurationWindow(QMainWindow):
             self.selected_roi = None
             self.selected_manual_roi = None
             self.roi_table.clearSelection()
-        self.invalidate_overlay_cache()
-        self.refresh()
-        self.update_trace_plot()
+        if refresh:
+            self.invalidate_overlay_cache()
+            self.refresh()
+            self.update_trace_plot()
 
     def select_final_entries(self, entries: list[tuple[str, int]]) -> None:
         wanted = set(entries)
@@ -1696,37 +1727,42 @@ class CurationWindow(QMainWindow):
         was_playing = self.playing
         if was_playing:
             self.pause_playback()
+        busy = self.begin_busy(f"Loading {new_kind} movie for {self.paths.trial_id}...")
         try:
             paths = find_trial_paths(self.data_root, self.paths.trial_id, new_kind)
         except Exception as exc:
+            self.end_busy(busy)
             QMessageBox.warning(self, "Movie source", str(exc))
             if was_playing:
                 self.start_playback()
             return
-        self.movie_kind = new_kind
-        self.paths = paths
-        save_last_trial_setting(self.data_root, self.movie_kind, self.paths.trial_id)
-        self.movie = movie_as_tyx(paths.movie_path)
-        self.refresh_acquisition_fps(paths)
-        self.frame_index = min(self.frame_index, max(self.movie.shape[0] - 1, 0))
-        self.frame_slider.setMaximum(max(self.movie.shape[0] - 1, 0))
-        self.frame_spin.setMaximum(max(self.movie.shape[0] - 1, 0))
-        self.frame_slider.blockSignals(True)
-        self.frame_spin.blockSignals(True)
-        self.frame_slider.setValue(self.frame_index)
-        self.frame_spin.setValue(self.frame_index)
-        self.frame_slider.blockSignals(False)
-        self.frame_spin.blockSignals(False)
-        self.current_polygon = []
-        self.ellipse_start = None
-        self.ellipse_current = None
-        self.freehand_drawing = False
-        self.invalidate_all_image_caches()
-        self.recompute_manual_roi_traces()
-        self.refresh_trial_list(selected_trial_id=self.paths.trial_id)
-        self.refresh()
-        self.update_trace_plot()
-        self.status.showMessage(f"Switched movie source to {new_kind}; ROI edits were kept unsaved")
+        try:
+            self.movie_kind = new_kind
+            self.paths = paths
+            save_last_trial_setting(self.data_root, self.movie_kind, self.paths.trial_id)
+            self.movie = movie_as_tyx(paths.movie_path)
+            self.refresh_acquisition_fps(paths)
+            self.frame_index = min(self.frame_index, max(self.movie.shape[0] - 1, 0))
+            self.frame_slider.setMaximum(max(self.movie.shape[0] - 1, 0))
+            self.frame_spin.setMaximum(max(self.movie.shape[0] - 1, 0))
+            self.frame_slider.blockSignals(True)
+            self.frame_spin.blockSignals(True)
+            self.frame_slider.setValue(self.frame_index)
+            self.frame_spin.setValue(self.frame_index)
+            self.frame_slider.blockSignals(False)
+            self.frame_spin.blockSignals(False)
+            self.current_polygon = []
+            self.ellipse_start = None
+            self.ellipse_current = None
+            self.freehand_drawing = False
+            self.invalidate_all_image_caches()
+            self.recompute_manual_roi_traces()
+            self.refresh_trial_list(selected_trial_id=self.paths.trial_id)
+            self.refresh()
+            self.update_trace_plot()
+            self.status.showMessage(f"Switched movie source to {new_kind}; ROI edits were kept unsaved")
+        finally:
+            self.end_busy(busy)
         if was_playing:
             self.start_playback()
 
@@ -2064,64 +2100,69 @@ class CurationWindow(QMainWindow):
         was_playing = self.playing
         if was_playing:
             self.pause_playback()
+        busy = self.begin_busy(f"Loading trial {trial_id}...")
         try:
             paths = find_trial_paths(self.data_root, trial_id, self.movie_kind)
         except Exception as exc:
+            self.end_busy(busy)
             QMessageBox.warning(self, "Load trial", str(exc))
             if was_playing:
                 self.start_playback()
             return
-        self.paths = paths
-        save_last_trial_setting(self.data_root, self.movie_kind, self.paths.trial_id)
-        self.setWindowTitle(f"ROI curation - {paths.trial_id}")
-        self.stat = np.array([], dtype=object)
-        self.roi_cache = []
-        self.iscell = np.zeros((0, 2), dtype=np.float32)
-        self.F = None
-        self.Fneu = None
-        self.suite2p_loaded = False
-        self.suite2p_ref_flags = np.zeros((0,), dtype=bool)
-        self.cellpose_loaded = False
-        self.cellpose_cache = []
-        self.movie = movie_as_tyx(paths.movie_path)
-        self.load_trace_movie_for_trial(paths)
-        self.refresh_acquisition_fps(paths)
-        self.frame_index = 0
-        self.selected_roi = None
-        self.selected_manual_roi = None
-        self.clear_candidate_selection()
-        self.selection_box_start = None
-        self.selection_box_current = None
-        self.selection_box_target = None
-        self.show_suite2p_refs = False
-        self.show_suite2p.blockSignals(True)
-        self.show_suite2p.setChecked(False)
-        self.show_suite2p.blockSignals(False)
-        self.show_cellpose_refs = False
-        self.show_cellpose.blockSignals(True)
-        self.show_cellpose.setChecked(False)
-        self.show_cellpose.blockSignals(False)
-        self.selected_suite2p_refs = set()
-        self.added_rois = []
-        self.removed_rois = []
-        self.selected_removed_roi = None
-        self.current_polygon = []
-        self.ellipse_start = None
-        self.ellipse_current = None
-        self.freehand_drawing = False
-        self.undo_stack = []
-        self.dirty = False
-        self.frame_slider.setMaximum(max(self.movie.shape[0] - 1, 0))
-        self.frame_slider.setValue(0)
-        self.frame_spin.setMaximum(max(self.movie.shape[0] - 1, 0))
-        self.frame_spin.setValue(0)
-        self.load_saved_curation_if_present()
-        self.populate_roi_list()
-        self.invalidate_all_image_caches()
-        self.left_canvas.reset_view(emit=False)
-        self.right_canvas.reset_view(emit=False)
-        self.refresh()
-        self.update_trace_plot()
+        try:
+            self.paths = paths
+            save_last_trial_setting(self.data_root, self.movie_kind, self.paths.trial_id)
+            self.setWindowTitle(f"ROI curation - {paths.trial_id}")
+            self.stat = np.array([], dtype=object)
+            self.roi_cache = []
+            self.iscell = np.zeros((0, 2), dtype=np.float32)
+            self.F = None
+            self.Fneu = None
+            self.suite2p_loaded = False
+            self.suite2p_ref_flags = np.zeros((0,), dtype=bool)
+            self.cellpose_loaded = False
+            self.cellpose_cache = []
+            self.movie = movie_as_tyx(paths.movie_path)
+            self.load_trace_movie_for_trial(paths)
+            self.refresh_acquisition_fps(paths)
+            self.frame_index = 0
+            self.selected_roi = None
+            self.selected_manual_roi = None
+            self.clear_candidate_selection()
+            self.selection_box_start = None
+            self.selection_box_current = None
+            self.selection_box_target = None
+            self.show_suite2p_refs = False
+            self.show_suite2p.blockSignals(True)
+            self.show_suite2p.setChecked(False)
+            self.show_suite2p.blockSignals(False)
+            self.show_cellpose_refs = False
+            self.show_cellpose.blockSignals(True)
+            self.show_cellpose.setChecked(False)
+            self.show_cellpose.blockSignals(False)
+            self.selected_suite2p_refs = set()
+            self.added_rois = []
+            self.removed_rois = []
+            self.selected_removed_roi = None
+            self.current_polygon = []
+            self.ellipse_start = None
+            self.ellipse_current = None
+            self.freehand_drawing = False
+            self.undo_stack = []
+            self.dirty = False
+            self.frame_slider.setMaximum(max(self.movie.shape[0] - 1, 0))
+            self.frame_slider.setValue(0)
+            self.frame_spin.setMaximum(max(self.movie.shape[0] - 1, 0))
+            self.frame_spin.setValue(0)
+            self.load_saved_curation_if_present()
+            self.populate_roi_list()
+            self.invalidate_all_image_caches()
+            self.left_canvas.reset_view(emit=False)
+            self.right_canvas.reset_view(emit=False)
+            self.refresh()
+            self.update_trace_plot()
+        finally:
+            self.end_busy(busy)
         if was_playing:
             self.start_playback()
 
@@ -2259,8 +2300,9 @@ class CurationWindow(QMainWindow):
             self.selection_box_start = (float(x), float(y))
             self.selection_box_current = (float(x), float(y))
             self.selection_box_target = "candidate_refs"
+            self._last_preview_refresh_at = 0.0
             self.status.showMessage("Drag to box-select candidate ROIs")
-            self.refresh()
+            self.refresh_reference_canvas()
             return
         manual_idx = self.manual_roi_at(x, y)
         if manual_idx is not None:
@@ -2343,7 +2385,8 @@ class CurationWindow(QMainWindow):
             and (buttons & Qt.MouseButton.LeftButton)
         ):
             self.selection_box_current = (float(x), float(y))
-            self.refresh()
+            if self.preview_refresh_due():
+                self.refresh_reference_canvas()
 
     def handle_overlay_release(self, x: float, y: float, button: object) -> None:
         if (
@@ -2358,9 +2401,16 @@ class CurationWindow(QMainWindow):
             self.selection_box_current = None
             self.selection_box_target = None
             self.set_candidate_suite2p_selection(suite2p_indices, mode=mode, refresh=False)
-            self.set_candidate_cellpose_selection(cellpose_indices, mode="add" if mode == "add" or suite2p_indices else "replace")
+            self.set_candidate_cellpose_selection(
+                cellpose_indices,
+                mode="add" if mode == "add" or suite2p_indices else "replace",
+                refresh=False,
+            )
             total = len(self.valid_candidate_suite2p_selection()) + len(self.valid_candidate_cellpose_selection())
             self.status.showMessage(f"Selected {total} candidate ROI(s)")
+            self.invalidate_overlay_cache()
+            self.refresh()
+            self.update_trace_plot()
 
     def nearest_existing_roi(self, x: float, y: float) -> tuple[int | None, float]:
         best_idx = None
@@ -2429,6 +2479,8 @@ class CurationWindow(QMainWindow):
             if idx >= len(self.roi_cache):
                 continue
             roi = self.roi_cache[idx]
+            if self.roi_pixels_hit(roi, x, y):
+                return ("suite2p", int(idx))
             ypix = np.asarray(roi.get("ypix", []), dtype=float)
             xpix = np.asarray(roi.get("xpix", []), dtype=float)
             if ypix.size == 0:
@@ -2445,6 +2497,36 @@ class CurationWindow(QMainWindow):
             points = roi.get("points", [])
             if len(points) >= 3 and MplPath(points).contains_point((x, y)):
                 return idx
+        return None
+
+    @staticmethod
+    def roi_pixels_hit(roi: dict, x: float, y: float, max_distance_sq: float = 100.0) -> bool:
+        ypix = np.asarray(roi.get("ypix", []), dtype=float)
+        xpix = np.asarray(roi.get("xpix", []), dtype=float)
+        if ypix.size == 0 or xpix.size == 0:
+            return False
+        return bool(np.min((xpix - x) ** 2 + (ypix - y) ** 2) <= max_distance_sq)
+
+    def final_roi_at(self, x: float, y: float) -> tuple[str, int] | None:
+        manual_idx = self.manual_roi_at(x, y)
+        if manual_idx is not None:
+            return ("manual", manual_idx)
+        best_idx = None
+        best_dist = float("inf")
+        for idx in sorted(self.selected_suite2p_refs):
+            if idx >= len(self.roi_cache):
+                continue
+            roi = self.roi_cache[idx]
+            ypix = np.asarray(roi.get("ypix", []), dtype=float)
+            xpix = np.asarray(roi.get("xpix", []), dtype=float)
+            if ypix.size == 0 or xpix.size == 0:
+                continue
+            dist = float(np.min((xpix - x) ** 2 + (ypix - y) ** 2))
+            if dist < best_dist:
+                best_idx = idx
+                best_dist = dist
+        if best_idx is not None and best_dist <= 100:
+            return ("suite2p", int(best_idx))
         return None
 
     def final_roi_entries_in_box(
@@ -2490,18 +2572,22 @@ class CurationWindow(QMainWindow):
             self.selection_box_start = (float(x), float(y))
             self.selection_box_current = (float(x), float(y))
             self.selection_box_target = "final"
+            self._last_preview_refresh_at = 0.0
             self.status.showMessage("Drag to box-select final ROIs")
-            self.refresh()
+            self.refresh_edit_canvas()
             return
         if button == Qt.MouseButton.RightButton and final_rois_visible:
-            manual_idx = self.manual_roi_at(x, y)
-            if manual_idx is not None:
-                manual_id = self.added_rois[manual_idx].get("manual_roi_id")
-                self.delete_manual_roi_at(manual_idx)
+            entry = self.final_roi_at(x, y)
+            if entry is None:
+                return
+            kind, idx = entry
+            if kind == "manual":
+                manual_id = self.added_rois[idx].get("manual_roi_id")
+                self.delete_manual_roi_at(idx)
                 self.status.showMessage(f"Deleted manual ROI {manual_id}")
                 return
-            suite_idx, suite_dist = self.nearest_selected_suite2p_roi(x, y)
-            if suite_idx is not None and suite_dist <= 100:
+            if kind == "suite2p":
+                suite_idx = idx
                 if self.remove_picked_suite2p_roi(suite_idx):
                     self.status.showMessage(f"Removed suite2p ROI {suite_idx} from picked refs")
                 return
@@ -2509,8 +2595,9 @@ class CurationWindow(QMainWindow):
             if button == Qt.MouseButton.LeftButton:
                 self.current_polygon = [(float(x), float(y))]
                 self.freehand_drawing = True
+                self._last_preview_refresh_at = 0.0
                 self.status.showMessage("Freehand ROI started")
-                self.refresh()
+                self.refresh_edit_canvas()
             elif button == Qt.MouseButton.RightButton:
                 self.undo_polygon_point()
             return
@@ -2519,36 +2606,27 @@ class CurationWindow(QMainWindow):
                 self.ellipse_start = (float(x), float(y))
                 self.ellipse_current = (float(x), float(y))
                 self.current_polygon = []
+                self._last_preview_refresh_at = 0.0
                 self.status.showMessage("Ellipse ROI started")
-                self.refresh()
+                self.refresh_edit_canvas()
             return
         if mode != "select ROI":
             return
         if mode == "select ROI":
             if not final_rois_visible:
                 return
-            manual_idx = self.manual_roi_at(x, y)
-            if manual_idx is not None:
-                if button == Qt.MouseButton.RightButton:
-                    manual_id = self.added_rois[manual_idx].get("manual_roi_id")
-                    self.delete_manual_roi_at(manual_idx)
+            entry = self.final_roi_at(x, y)
+            if entry is not None:
+                kind, idx = entry
+                if button == Qt.MouseButton.RightButton and kind == "manual":
+                    manual_id = self.added_rois[idx].get("manual_roi_id")
+                    self.delete_manual_roi_at(idx)
                     self.status.showMessage(f"Removed manual ROI {manual_id} from final ROI set")
+                elif button == Qt.MouseButton.RightButton and kind == "suite2p":
+                    if self.remove_picked_suite2p_roi(idx):
+                        self.status.showMessage(f"Removed suite2p ROI {idx} from picked refs")
                 else:
-                    self.set_final_entry_selection(
-                        ("manual", manual_idx),
-                        additive=self.additive_selection_requested(),
-                    )
-                return
-            suite_idx, suite_dist = self.nearest_selected_suite2p_roi(x, y)
-            if suite_idx is not None and suite_dist <= 100:
-                if button == Qt.MouseButton.RightButton:
-                    if self.remove_picked_suite2p_roi(suite_idx):
-                        self.status.showMessage(f"Removed suite2p ROI {suite_idx} from picked refs")
-                else:
-                    self.set_final_entry_selection(
-                        ("suite2p", suite_idx),
-                        additive=self.additive_selection_requested(),
-                    )
+                    self.set_final_entry_selection(entry, additive=self.additive_selection_requested())
                 return
             if button == Qt.MouseButton.LeftButton:
                 self.clear_canvas_selection()
@@ -2564,12 +2642,14 @@ class CurationWindow(QMainWindow):
             and (buttons & Qt.MouseButton.LeftButton)
         ):
             self.selection_box_current = (float(x), float(y))
-            self.refresh()
+            if self.preview_refresh_due():
+                self.refresh_edit_canvas()
             return
         if mode == "draw ellipse ROI" and self.ellipse_start is not None and (buttons & Qt.MouseButton.LeftButton):
             self.ellipse_current = (float(x), float(y))
             self.current_polygon = ellipse_points(self.ellipse_start, self.ellipse_current)
-            self.refresh()
+            if self.preview_refresh_due():
+                self.refresh_edit_canvas()
             return
         if mode != "draw freehand ROI":
             return
@@ -2581,7 +2661,8 @@ class CurationWindow(QMainWindow):
             if (px - point[0]) ** 2 + (py - point[1]) ** 2 < 0.75**2:
                 return
         self.current_polygon.append(point)
-        self.refresh()
+        if self.preview_refresh_due():
+            self.refresh_edit_canvas()
 
     def handle_right_release(self, x: float, y: float, button: object) -> None:
         mode = self.mode_combo.currentText()
@@ -3407,11 +3488,18 @@ class CurationWindow(QMainWindow):
         for p0, p1 in zip(corners, corners[1:] + corners[:1]):
             painter.drawLine(p0, p1)
 
-    def refresh(self) -> None:
+    def refresh_reference_canvas(self) -> None:
         shape = (self.movie.shape[-2], self.movie.shape[-1])
         self.left_canvas.set_rendered_pixmap(self.frame_pixmap(view="reference"), shape)
+
+    def refresh_edit_canvas(self) -> None:
+        shape = (self.movie.shape[-2], self.movie.shape[-1])
+        self.right_canvas.set_rendered_pixmap(self.frame_pixmap(view="edit"), shape)
+
+    def refresh(self) -> None:
+        self.refresh_reference_canvas()
         if not (self.playing and self.fast_play_single_view.isChecked()):
-            self.right_canvas.set_rendered_pixmap(self.frame_pixmap(view="edit"), shape)
+            self.refresh_edit_canvas()
         kept = int(len(self.selected_suite2p_refs))
         self.status.showMessage(
             f"trial={self.paths.trial_id} | frame={self.frame_index}/{self.movie.shape[0]-1} | "
@@ -3853,14 +3941,27 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         trial_id = load_last_trial_setting(data_root, args.movie_kind, trial_ids) or trial_ids[0]
     paths = find_trial_paths(data_root, trial_id, args.movie_kind)
-    window = CurationWindow(
-        paths,
-        data_root=data_root,
-        movie_kind=args.movie_kind,
-        neuropil_coeff=args.neuropil_coeff,
-        f0_percentile=args.f0_percentile,
-        f0_eps=args.f0_eps,
-    )
+    startup_busy = QProgressDialog(f"Loading trial {trial_id}...", "", 0, 0)
+    startup_busy.setCancelButton(None)
+    startup_busy.setWindowModality(Qt.WindowModality.ApplicationModal)
+    startup_busy.setMinimumDuration(0)
+    QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+    startup_busy.show()
+    QApplication.processEvents()
+    try:
+        window = CurationWindow(
+            paths,
+            data_root=data_root,
+            movie_kind=args.movie_kind,
+            neuropil_coeff=args.neuropil_coeff,
+            f0_percentile=args.f0_percentile,
+            f0_eps=args.f0_eps,
+        )
+    finally:
+        QApplication.restoreOverrideCursor()
+        startup_busy.close()
+        startup_busy.deleteLater()
+        QApplication.processEvents()
     window.resize(1550, 900)
     window.show()
     return int(app.exec())
