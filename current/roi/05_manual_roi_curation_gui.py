@@ -33,13 +33,14 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDialog,
     QDoubleSpinBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
-    QProgressDialog,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QSlider,
@@ -68,6 +69,45 @@ class TrialPaths:
     fneu_path: Path | None
     movie_path: Path
     output_dir: Path
+
+
+class BusyDialog(QDialog):
+    def __init__(self, message: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Please wait")
+        self.setModal(True)
+        self.setWindowFlag(Qt.WindowType.WindowContextHelpButtonHint, False)
+        self.setStyleSheet(
+            """
+            QDialog {
+                background: #f5f5f5;
+                color: #111111;
+            }
+            QLabel {
+                color: #111111;
+                font-size: 13px;
+            }
+            QProgressBar {
+                min-height: 12px;
+                border: 1px solid #b0b0b0;
+                border-radius: 4px;
+                background: #ffffff;
+            }
+            QProgressBar::chunk {
+                background: #2f80ed;
+                border-radius: 4px;
+            }
+            """
+        )
+        layout = QVBoxLayout()
+        label = QLabel(message)
+        label.setWordWrap(True)
+        progress = QProgressBar()
+        progress.setRange(0, 0)
+        layout.addWidget(label)
+        layout.addWidget(progress)
+        self.setLayout(layout)
+        self.resize(360, 96)
 
 
 MOVIE_PATTERNS = {
@@ -1194,18 +1234,15 @@ class CurationWindow(QMainWindow):
         self.status.showMessage("Cleared image cache")
         self.refresh()
 
-    def begin_busy(self, message: str) -> QProgressDialog:
-        dialog = QProgressDialog(message, "", 0, 0, self)
-        dialog.setCancelButton(None)
-        dialog.setWindowModality(Qt.WindowModality.WindowModal)
-        dialog.setMinimumDuration(0)
+    def begin_busy(self, message: str) -> BusyDialog:
+        dialog = BusyDialog(message, self)
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         dialog.show()
         QApplication.processEvents()
         return dialog
 
     @staticmethod
-    def end_busy(dialog: QProgressDialog) -> None:
+    def end_busy(dialog: BusyDialog) -> None:
         QApplication.restoreOverrideCursor()
         dialog.close()
         dialog.deleteLater()
@@ -1218,7 +1255,22 @@ class CurationWindow(QMainWindow):
         self._last_preview_refresh_at = now
         return True
 
+    @staticmethod
+    def clear_roi_trace_cache(roi: dict) -> None:
+        for key in (
+            "_trace_F",
+            "_trace_Fneu",
+            "_trace_F_corrected",
+            "_trace_dff",
+            "trace_summary",
+            "f0",
+            "neuropil_pixels",
+        ):
+            roi.pop(key, None)
+
     def mark_manual_traces_dirty(self) -> None:
+        for roi in self.added_rois:
+            self.clear_roi_trace_cache(roi)
         self._manual_traces_dirty = True
 
     def ensure_manual_traces_current(self) -> None:
@@ -1765,7 +1817,7 @@ class CurationWindow(QMainWindow):
             self.ellipse_current = None
             self.freehand_drawing = False
             self.invalidate_all_image_caches()
-            self.recompute_manual_roi_traces()
+            self.mark_manual_traces_dirty()
             self.refresh_trial_list(selected_trial_id=self.paths.trial_id)
             self.refresh()
             self.update_trace_plot()
@@ -1821,6 +1873,7 @@ class CurationWindow(QMainWindow):
         )
         roi["points"] = points
         self.added_rois[idx] = roi
+        self._manual_traces_dirty = False
         return True
 
     def default_trace_movie_path(self, paths: TrialPaths) -> Path:
@@ -2512,7 +2565,7 @@ class CurationWindow(QMainWindow):
                 continue
             roi = self.roi_cache[idx]
             if self.roi_pixels_hit(roi, x, y):
-                return ("suite2p", int(idx))
+                return int(idx), 0.0
             ypix = np.asarray(roi.get("ypix", []), dtype=float)
             xpix = np.asarray(roi.get("xpix", []), dtype=float)
             if ypix.size == 0:
@@ -2529,7 +2582,16 @@ class CurationWindow(QMainWindow):
             points = roi.get("points", [])
             if len(points) >= 3 and MplPath(points).contains_point((x, y)):
                 return idx
+            if self.points_hit(points, x, y):
+                return idx
         return None
+
+    @staticmethod
+    def points_hit(points: object, x: float, y: float, max_distance_sq: float = 100.0) -> bool:
+        arr = np.asarray(points, dtype=float)
+        if arr.ndim != 2 or arr.shape[0] == 0 or arr.shape[1] < 2:
+            return False
+        return bool(np.min((arr[:, 0] - x) ** 2 + (arr[:, 1] - y) ** 2) <= max_distance_sq)
 
     @staticmethod
     def roi_pixels_hit(roi: dict, x: float, y: float, max_distance_sq: float = 100.0) -> bool:
@@ -2549,6 +2611,8 @@ class CurationWindow(QMainWindow):
             if idx >= len(self.roi_cache):
                 continue
             roi = self.roi_cache[idx]
+            if self.roi_pixels_hit(roi, x, y):
+                return ("suite2p", int(idx))
             ypix = np.asarray(roi.get("ypix", []), dtype=float)
             xpix = np.asarray(roi.get("xpix", []), dtype=float)
             if ypix.size == 0 or xpix.size == 0:
@@ -3106,7 +3170,7 @@ class CurationWindow(QMainWindow):
                 "source": str(removed.get("roi_source", "manual")),
                 "id": int(removed.get("cellpose_original_id", removed.get("manual_roi_id", manual_idx))),
                 "type": str(removed.get("roi_type", "manual")),
-                "roi": copy.deepcopy(removed),
+                "roi": self.roi_without_trace(removed),
             }
         )
         self.selected_removed_roi = None
@@ -3145,7 +3209,7 @@ class CurationWindow(QMainWindow):
                 self.selected_manual_roi = None
                 restored_count += 1
             elif source in {"manual", "cellpose", "suite2p_reference_imported"} and "roi" in restored:
-                self.added_rois.append(copy.deepcopy(restored["roi"]))
+                self.added_rois.append(self.roi_without_trace(restored["roi"]))
                 self.selected_roi = None
                 self.selected_manual_roi = len(self.added_rois) - 1
                 restored_count += 1
@@ -3191,7 +3255,7 @@ class CurationWindow(QMainWindow):
                     "source": str(roi.get("roi_source", "manual")),
                     "id": int(roi.get("cellpose_original_id", roi.get("manual_roi_id", -1))),
                     "type": str(roi.get("roi_type", "manual")),
-                    "roi": copy.deepcopy(roi),
+                    "roi": self.roi_without_trace(roi),
                 }
             )
         self.selected_suite2p_refs = set()
@@ -3208,6 +3272,25 @@ class CurationWindow(QMainWindow):
         self.refresh()
         self.update_trace_plot()
 
+    @staticmethod
+    def roi_without_trace(roi: dict) -> dict:
+        return copy.deepcopy({k: v for k, v in roi.items() if not k.startswith("_trace_")})
+
+    @classmethod
+    def removed_entry_without_trace(cls, entry: dict) -> dict:
+        clean = copy.deepcopy({k: v for k, v in entry.items() if k != "roi"})
+        if "roi" in entry:
+            clean["roi"] = cls.roi_without_trace(entry["roi"])
+        return clean
+
+    @classmethod
+    def roi_list_without_traces(cls, rois: list[dict]) -> list[dict]:
+        return [cls.roi_without_trace(roi) for roi in rois]
+
+    @classmethod
+    def removed_list_without_traces(cls, entries: list[dict]) -> list[dict]:
+        return [cls.removed_entry_without_trace(entry) for entry in entries]
+
     def push_undo(self, label: str) -> None:
         self.undo_stack.append(
             {
@@ -3216,8 +3299,8 @@ class CurationWindow(QMainWindow):
                 "selected_candidate_suite2p_refs": set(self.selected_candidate_suite2p_refs),
                 "selected_candidate_cellpose_refs": set(self.selected_candidate_cellpose_refs),
                 "selected_suite2p_refs": set(self.selected_suite2p_refs),
-                "added_rois": copy.deepcopy(self.added_rois),
-                "removed_rois": copy.deepcopy(self.removed_rois),
+                "added_rois": self.roi_list_without_traces(self.added_rois),
+                "removed_rois": self.removed_list_without_traces(self.removed_rois),
                 "current_polygon": list(self.current_polygon),
                 "ellipse_start": self.ellipse_start,
                 "ellipse_current": self.ellipse_current,
@@ -3251,7 +3334,7 @@ class CurationWindow(QMainWindow):
             self.ellipse_current = state["ellipse_current"]
         self.selected_roi = state["selected_roi"]
         self.selected_manual_roi = state["selected_manual_roi"]
-        self.recompute_manual_roi_traces()
+        self.mark_manual_traces_dirty()
         self.invalidate_overlay_cache()
         self.dirty = True
         self.status.showMessage(f"Undid {state['label']}")
@@ -3696,7 +3779,13 @@ class CurationWindow(QMainWindow):
         super().keyPressEvent(event)
 
     def save_outputs(self, show_message: bool = True) -> None:
-        self.ensure_manual_traces_current()
+        busy = self.begin_busy(f"Saving manual curation for {self.paths.trial_id}...")
+        try:
+            self._save_outputs(show_message=show_message)
+        finally:
+            self.end_busy(busy)
+
+    def _save_outputs(self, show_message: bool = True) -> None:
         self.paths.output_dir.mkdir(parents=True, exist_ok=True)
         iscell_path = self.paths.output_dir / f"{self.paths.trial_id}_iscell_manual.npy"
         kept_path = self.paths.output_dir / f"{self.paths.trial_id}_selected_suite2p_indices.csv"
@@ -3764,12 +3853,6 @@ class CurationWindow(QMainWindow):
                         "neuropil_exclusion": "other_final_rois",
                     }
                 )
-                f, fneu, _, _, _, _ = self.traces_for_mask(
-                    mask,
-                    exclusion_mask=exclusion,
-                )
-                suite2p_f_rows.append(np.asarray(f, dtype=np.float32))
-                suite2p_fneu_rows.append(np.asarray(fneu, dtype=np.float32))
             points = ordered_boundary_points(ypix, xpix)
             if len(points) >= 3:
                 fiji_rois.append((safe_roi_name("suite2p", int(idx)), points))
@@ -3828,8 +3911,9 @@ class CurationWindow(QMainWindow):
                     )
                     suite2p_stat.append(stat_entry)
                     fiji_rois.append((safe_roi_name("manual", int(roi["manual_roi_id"])), points))
-                suite2p_f_rows.append(np.asarray(roi["_trace_F"], dtype=np.float32))
-                suite2p_fneu_rows.append(np.asarray(roi["_trace_Fneu"], dtype=np.float32))
+                if "_trace_F" in roi and "_trace_Fneu" in roi:
+                    suite2p_f_rows.append(np.asarray(roi["_trace_F"], dtype=np.float32))
+                    suite2p_fneu_rows.append(np.asarray(roi["_trace_Fneu"], dtype=np.float32))
                 new_roi_set.append(
                     {
                         **clean,
@@ -3842,30 +3926,29 @@ class CurationWindow(QMainWindow):
                         ),
                     }
                 )
-            n_frames = len(roi.get("_trace_F", []))
-            for frame in range(n_frames):
-                trace_rows.append(
-                    [
-                        int(roi["manual_roi_id"]),
-                        frame,
-                        roi["_trace_F"][frame],
-                        roi["_trace_Fneu"][frame],
-                        roi["_trace_F_corrected"][frame],
-                        roi["_trace_dff"][frame],
-                    ]
-                )
+            if all(k in roi for k in ("_trace_F", "_trace_Fneu", "_trace_F_corrected", "_trace_dff")):
+                n_frames = len(roi.get("_trace_F", []))
+                for frame in range(n_frames):
+                    trace_rows.append(
+                        [
+                            int(roi["manual_roi_id"]),
+                            frame,
+                            roi["_trace_F"][frame],
+                            roi["_trace_Fneu"][frame],
+                            roi["_trace_F_corrected"][frame],
+                            roi["_trace_dff"][frame],
+                        ]
+                    )
         with additions_path.open("w", encoding="utf-8") as handle:
             json.dump(serializable_rois, handle, indent=2)
 
-        if (
-            len(suite2p_stat) == len(new_roi_set)
-            and len(suite2p_f_rows) == len(suite2p_stat)
-            and len(suite2p_fneu_rows) == len(suite2p_stat)
-        ):
+        if len(suite2p_stat) == len(new_roi_set):
             order = sorted(range(len(suite2p_stat)), key=lambda i: final_roi_sort_key(suite2p_stat[i]))
             suite2p_stat = [suite2p_stat[i] for i in order]
-            suite2p_f_rows = [suite2p_f_rows[i] for i in order]
-            suite2p_fneu_rows = [suite2p_fneu_rows[i] for i in order]
+            if len(suite2p_f_rows) == len(order):
+                suite2p_f_rows = [suite2p_f_rows[i] for i in order]
+            if len(suite2p_fneu_rows) == len(order):
+                suite2p_fneu_rows = [suite2p_fneu_rows[i] for i in order]
             new_roi_set = [new_roi_set[i] for i in order]
             for final_idx, (stat_entry, roi_record) in enumerate(zip(suite2p_stat, new_roi_set), start=1):
                 stat_entry["final_roi_id"] = int(final_idx)
@@ -3877,14 +3960,22 @@ class CurationWindow(QMainWindow):
         np.save(suite2p_compat_dir / "stat.npy", np.asarray(suite2p_stat, dtype=object))
         compat_iscell = np.ones((len(suite2p_stat), 2), dtype=np.float32)
         np.save(suite2p_compat_dir / "iscell.npy", compat_iscell)
+        wrote_f = False
+        wrote_fneu = False
         if suite2p_f_rows and len(suite2p_f_rows) == len(suite2p_stat):
             frame_counts = {len(row) for row in suite2p_f_rows}
             if len(frame_counts) == 1:
                 np.save(suite2p_compat_dir / "F.npy", np.vstack(suite2p_f_rows).astype(np.float32))
+                wrote_f = True
         if suite2p_fneu_rows and len(suite2p_fneu_rows) == len(suite2p_stat):
             frame_counts = {len(row) for row in suite2p_fneu_rows}
             if len(frame_counts) == 1:
                 np.save(suite2p_compat_dir / "Fneu.npy", np.vstack(suite2p_fneu_rows).astype(np.float32))
+                wrote_fneu = True
+        if not wrote_f:
+            (suite2p_compat_dir / "F.npy").unlink(missing_ok=True)
+        if not wrote_fneu:
+            (suite2p_compat_dir / "Fneu.npy").unlink(missing_ok=True)
         with zipfile.ZipFile(fiji_roi_zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
             for name, points in fiji_rois:
                 zf.writestr(name, imagej_polygon_roi_bytes(points, name))
@@ -3893,6 +3984,8 @@ class CurationWindow(QMainWindow):
                 handle.write("manual_roi_id,frame,F,Fneu,F_corrected,dff\n")
                 for row in trace_rows:
                     handle.write(",".join(str(value) for value in row) + "\n")
+        else:
+            trace_path.unlink(missing_ok=True)
         summary = {
             "trial_id": self.paths.trial_id,
             "display_movie_path": str(self.paths.movie_path),
@@ -3908,6 +4001,10 @@ class CurationWindow(QMainWindow):
             "suite2p_compatible_dir": str(suite2p_compat_dir),
             "fiji_roiset_zip_path": str(fiji_roi_zip_path),
             "manual_added_roi_traces_path": str(trace_path) if trace_rows else None,
+            "manual_added_roi_traces_note": (
+                "Trace cache is written only for ROI traces explicitly computed in the GUI. "
+                "Downstream analysis should use stat.npy and re-extract traces from the motion-corrected movie."
+            ),
             "n_suite2p_roi": int(len(self.iscell)),
             "n_selected_suite2p_reference_roi": int(len(kept_indices)),
             "n_deleted_suite2p_reference_roi": 0,
@@ -3972,10 +4069,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         trial_id = load_last_trial_setting(data_root, args.movie_kind, trial_ids) or trial_ids[0]
     paths = find_trial_paths(data_root, trial_id, args.movie_kind)
-    startup_busy = QProgressDialog(f"Loading trial {trial_id}...", "", 0, 0)
-    startup_busy.setCancelButton(None)
-    startup_busy.setWindowModality(Qt.WindowModality.ApplicationModal)
-    startup_busy.setMinimumDuration(0)
+    startup_busy = BusyDialog(f"Loading trial {trial_id}...")
     QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
     startup_busy.show()
     QApplication.processEvents()
