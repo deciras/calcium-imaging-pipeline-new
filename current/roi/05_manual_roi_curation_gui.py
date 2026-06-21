@@ -2403,19 +2403,6 @@ class CurationWindow(QMainWindow):
             self.status.showMessage("Drag to box-select candidate ROIs")
             self.refresh_reference_canvas()
             return
-        manual_idx = self.manual_roi_at(x, y)
-        if manual_idx is not None:
-            if button == Qt.MouseButton.RightButton:
-                manual_id = self.added_rois[manual_idx].get("manual_roi_id")
-                self.delete_manual_roi_at(manual_idx)
-                self.status.showMessage(f"Removed manual ROI {manual_id} from final ROI set")
-            else:
-                self.set_final_entry_selection(
-                    ("manual", manual_idx),
-                    additive=self.additive_selection_requested(),
-                )
-                self.status.showMessage(f"Selected manual ROI {self.added_rois[manual_idx]['manual_roi_id']}")
-            return
         if not self.show_suite2p_refs and not self.show_cellpose_refs:
             if button == Qt.MouseButton.LeftButton:
                 self.clear_canvas_selection()
@@ -3472,7 +3459,7 @@ class CurationWindow(QMainWindow):
             self.paint_cellpose_rois(painter, highlight_selection=False)
         elif view == "edit":
             self.paint_suite2p_rois(painter, selected_only=True)
-        if view != "edit" or self.show_final_rois.isChecked():
+        if view == "edit" and self.show_final_rois.isChecked():
             self.paint_added_rois(painter)
         painter.end()
         if len(self._overlay_pixmap_cache) > 8:
