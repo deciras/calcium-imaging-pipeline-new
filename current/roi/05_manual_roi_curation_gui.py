@@ -837,7 +837,7 @@ class CurationWindow(QMainWindow):
         self.paths = paths
         self.data_root = data_root
         self.movie_kind = movie_kind
-        save_last_trial_setting(self.data_root, self.movie_kind, self.paths.trial_id)
+        self.remember_trial_access(self.paths.trial_id)
         self.trial_ids = discover_trial_ids(data_root, movie_kind)
         if paths.trial_id not in self.trial_ids:
             self.trial_ids.insert(0, paths.trial_id)
@@ -1042,6 +1042,7 @@ class CurationWindow(QMainWindow):
         self.trial_combo.setMaxVisibleItems(30)
         self.trial_combo.setMinimumContentsLength(28)
         self.refresh_trial_selectors(paths.trial_id)
+        self.trial_combo.currentIndexChanged.connect(self.remember_selected_trial_access)
 
         self.show_suite2p_iscell0 = QCheckBox("show suite2p iscell=0 refs")
         self.show_suite2p_iscell0.setChecked(False)
@@ -1728,6 +1729,16 @@ class CurationWindow(QMainWindow):
             self.trial_combo.setCurrentIndex(0)
         self.trial_combo.blockSignals(False)
 
+    def remember_trial_access(self, trial_id: str | None = None) -> None:
+        trial = str(trial_id or self.paths.trial_id).strip()
+        if trial:
+            save_last_trial_setting(self.data_root, self.movie_kind, trial)
+
+    def remember_selected_trial_access(self, *_args) -> None:
+        trial_id = self.selected_trial_combo_id()
+        if trial_id:
+            self.remember_trial_access(trial_id)
+
     def selected_trial_combo_id(self) -> str:
         data = self.trial_combo.currentData()
         if data:
@@ -1800,7 +1811,7 @@ class CurationWindow(QMainWindow):
         try:
             self.movie_kind = new_kind
             self.paths = paths
-            save_last_trial_setting(self.data_root, self.movie_kind, self.paths.trial_id)
+            self.remember_trial_access(self.paths.trial_id)
             self.movie = movie_as_tyx(paths.movie_path)
             self.refresh_acquisition_fps(paths)
             self.frame_index = min(self.frame_index, max(self.movie.shape[0] - 1, 0))
@@ -2150,6 +2161,7 @@ class CurationWindow(QMainWindow):
         trial_id = self.selected_trial_combo_id()
         if not trial_id:
             return
+        self.remember_trial_access(trial_id)
         self.load_trial_id(trial_id)
 
     def load_next_trial(self) -> None:
@@ -2170,6 +2182,7 @@ class CurationWindow(QMainWindow):
         show_dates = date_filter in (None, "__all__")
         label = trial_display_label(self.data_root, self.movie_kind, next_trial_id) if show_dates else next_trial_id
         self.trial_combo.setCurrentText(label)
+        self.remember_trial_access(next_trial_id)
         self.load_trial_id(next_trial_id)
 
     def load_trial_id(self, trial_id: str, already_checked: bool = False) -> None:
@@ -2179,6 +2192,7 @@ class CurationWindow(QMainWindow):
             except Exception:
                 new_movie_path = None
             if new_movie_path == self.paths.movie_path:
+                self.remember_trial_access(trial_id)
                 return
         if not already_checked and not self.maybe_save_before_switch():
             return
@@ -2196,7 +2210,7 @@ class CurationWindow(QMainWindow):
             return
         try:
             self.paths = paths
-            save_last_trial_setting(self.data_root, self.movie_kind, self.paths.trial_id)
+            self.remember_trial_access(self.paths.trial_id)
             self.setWindowTitle(f"ROI curation - {paths.trial_id}")
             self.stat = np.array([], dtype=object)
             self.roi_cache = []
@@ -4035,7 +4049,6 @@ class CurationWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         if self.maybe_save_before_switch(reason="closing"):
-            save_last_trial_setting(self.data_root, self.movie_kind, self.paths.trial_id)
             event.accept()
         else:
             event.ignore()
