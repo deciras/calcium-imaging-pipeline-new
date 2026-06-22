@@ -3841,19 +3841,6 @@ class CurationWindow(QMainWindow):
                     "suite2p_original_id": int(idx),
                 }
             )
-            mask = self.suite2p_mask(int(idx))
-            if np.any(mask):
-                exclusion = self.final_roi_exclusion_mask(mask.shape, exclude_suite2p_idx=int(idx))
-                neuropil = annulus_mask(mask, exclusion_mask=exclusion)
-                neuropil_ypix, neuropil_xpix = np.nonzero(neuropil)
-                suite2p_stat[-1].update(
-                    {
-                        "neuropil_ypix": neuropil_ypix.astype(np.int32),
-                        "neuropil_xpix": neuropil_xpix.astype(np.int32),
-                        "neuropil_npix": int(neuropil.sum()),
-                        "neuropil_exclusion": "other_final_rois",
-                    }
-                )
             points = ordered_boundary_points(ypix, xpix)
             if len(points) >= 3:
                 fiji_rois.append((safe_roi_name("suite2p", int(idx)), points))
@@ -3899,17 +3886,6 @@ class CurationWindow(QMainWindow):
                             stat_entry["previous_suite2p_original_id"] = int(previous_suite2p_id)
                         except (TypeError, ValueError):
                             pass
-                    exclusion = self.final_roi_exclusion_mask(mask.shape, exclude_manual_idx=manual_idx)
-                    neuropil = annulus_mask(mask, exclusion_mask=exclusion)
-                    neuropil_ypix, neuropil_xpix = np.nonzero(neuropil)
-                    stat_entry.update(
-                        {
-                            "neuropil_ypix": neuropil_ypix.astype(np.int32),
-                            "neuropil_xpix": neuropil_xpix.astype(np.int32),
-                            "neuropil_npix": int(neuropil.sum()),
-                            "neuropil_exclusion": "other_final_rois",
-                        }
-                    )
                     suite2p_stat.append(stat_entry)
                     fiji_rois.append((safe_roi_name("manual", int(roi["manual_roi_id"])), points))
                 if "_trace_F" in roi and "_trace_Fneu" in roi:
@@ -4017,7 +3993,7 @@ class CurationWindow(QMainWindow):
             "n_suite2p_compatible_roi": int(len(suite2p_stat)),
             "n_fiji_roi": int(len(fiji_rois)),
             "neuropil_coeff": float(self.neuropil_coeff),
-            "neuropil_mask_source": "local_annulus_excluding_other_final_rois",
+            "neuropil_mask_source": "computed_downstream_from_stat_masks",
             "f0_percentile": float(self.f0_percentile),
             "note": (
                 "The saved manual ROI set contains all accepted final ROIs: selected suite2p "
