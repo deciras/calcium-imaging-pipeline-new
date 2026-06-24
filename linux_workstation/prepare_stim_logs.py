@@ -111,7 +111,13 @@ def collect_source_files(data_root: Path, raw_root: Path, source_glob: str) -> l
     files: list[Path] = []
     for folder in source_folders(data_root, raw_root, source_glob):
         for pattern in LOG_PATTERNS:
-            files.extend(sorted(path for path in folder.glob(pattern) if path.is_file()))
+            files.extend(
+                sorted(
+                    path
+                    for path in folder.glob(pattern)
+                    if path.is_file() and not path.name.startswith("._")
+                )
+            )
     return sorted(set(files))
 
 
@@ -216,6 +222,12 @@ def write_manifest(target_root: Path, link_plans: list[LinkPlan], synth_plans: l
         writer.writerows(rows)
 
 
+def remove_appledouble_files(target_root: Path) -> None:
+    for path in target_root.glob("._*"):
+        if path.is_file() or path.is_symlink():
+            path.unlink()
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     data_root = args.data_root.expanduser().resolve()
@@ -272,6 +284,7 @@ def main(argv: list[str] | None = None) -> int:
     for plan in synth_plans:
         apply_synth_config(plan)
     write_manifest(target_root, link_plans, synth_plans)
+    remove_appledouble_files(target_root)
     print()
     print(f"Prepared stimulus logs: {target_root}")
     return 0

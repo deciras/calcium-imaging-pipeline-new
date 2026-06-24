@@ -25,10 +25,23 @@ Typical use:
 1. Set `Data root`.
 2. Set `Conda` and `Fiji` paths if the defaults are not correct.
 3. Choose a step group such as `00-05 premanual`, `manual GUI`, or
-   `06-16 postmanual`.
+   `06-18 postmanual`.
 4. Use `Plan` to print the resolved command without running steps.
 5. Use `Start` to run the selected steps and monitor the live log.
 6. Use `Stop` to terminate the child process.
+
+For post-manual population analysis, `Analysis input` controls the matrix used
+by step 13 similarity, step 14 hierarchical clustering, and step 16 PCA/UMAP:
+
+- `Stimulus slices` is the recommended default. It uses step 12 normalized
+  peri-stimulus slice features, so clustering is based on stimulus-locked
+  response signatures rather than the entire continuous trace.
+- `Full traces` uses complete dF/F traces and is useful as a QC view for drift,
+  bleaching, spontaneous waves, or tissue-state effects.
+- `Summary features` uses scalar ROI metrics from step 11.
+- `Response scalars only` uses compact response matrices where supported.
+
+`Cluster scaling` controls step 14 only: normalized, raw/source-scale, or both.
 
 The dashboard remembers the last `Data root` used by `Plan`, `Start`, or
 `Open manual GUI`, so the next launch opens at the previous working location.

@@ -16,7 +16,7 @@ import pandas as pd
 
 
 LOGGER = logging.getLogger("population_features")
-STEP_NAME = "10_population_features"
+STEP_NAME = "11_population_features"
 ROI_METADATA_COLUMNS = [
     "source_roi_id",
     "roi_source",
@@ -228,7 +228,7 @@ def process_trial(trial: TrialInput, out_dir: Path, args: argparse.Namespace) ->
     features = add_trace_stats(features, dff)
     features = merge_optional(features, read_csv(trial.event_rate_path), ["event_rate_hz", "n_events", "mean_amplitude", "mean_duration_sec", "mean_auc"])
     features = merge_optional(features, read_csv(trial.response_summary_path), ["mean_response", "max_response", "mean_delta", "max_zscore", "mean_event_rate_response", "mean_latency_sec", "response_type"])
-    features = merge_optional(features, read_csv(trial.angle_summary_path), ["preferred_angle", "preferred_response", "orthogonal_response", "OSI", "vector_strength", "circular_variance", "angle_selective"])
+    features = merge_optional(features, read_csv(trial.angle_summary_path), ["preferred_angle", "preferred_response", "preferred_reliability", "orthogonal_response", "OSI", "vector_strength", "circular_variance", "angle_selective"])
     features_z = zscore_features(features)
 
     angle_table = read_csv(trial.angle_response_path)
@@ -244,7 +244,7 @@ def process_trial(trial: TrialInput, out_dir: Path, args: argparse.Namespace) ->
         "trace_features": ["mean_dff", "std_dff", "max_dff", "dff_skewness", "dff_kurtosis"],
         "event_features": ["event_rate_hz", "n_events", "mean_amplitude", "mean_duration_sec", "mean_auc"],
         "stim_response_features": response_cols,
-        "angle_features": ["preferred_angle", "OSI", "vector_strength", "circular_variance"],
+        "angle_features": ["preferred_angle", "preferred_reliability", "OSI", "vector_strength", "circular_variance"],
     }
     (out_dir / f"{trial.trial_id}_feature_description.json").write_text(json.dumps(description, indent=2), encoding="utf-8")
     summary = {
@@ -266,6 +266,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--data-root", type=Path, required=True)
     parser.add_argument("--input-root", type=Path, help="Step-06 root. Default: OUTPUT_ROOT/06_dff.")
     parser.add_argument("--output-root", type=Path, help="Pipeline output root. Default: DATA_ROOT.")
+    parser.add_argument("--trial-id", help="Only process one trial ID, or a comma-separated list of trial IDs.")
     parser.add_argument("--action", choices=("skip", "overwrite"), default="skip")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--dpi", type=int, default=150)
@@ -285,6 +286,9 @@ def main(argv: list[str] | None = None) -> int:
         LOGGER.error("Input root does not exist: %s", dff_root)
         return 1
     trials = discover_trials(output_root, dff_root)
+    if args.trial_id:
+        wanted = {item.strip() for item in args.trial_id.split(",") if item.strip()}
+        trials = [trial for trial in trials if trial.trial_id in wanted]
     summary = RunSummary(found=len(trials))
     rows = []
     LOGGER.info("Input root : %s", dff_root)

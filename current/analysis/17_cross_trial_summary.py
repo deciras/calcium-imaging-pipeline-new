@@ -13,9 +13,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from trial_context_utils import build_trial_context_table, filter_table_by_excluded_trials, load_excluded_trial_ids, merge_context_warnings
+
 
 LOGGER = logging.getLogger("cross_trial_summary")
-STEP_NAME = "15_cross_trial_summary"
+STEP_NAME = "17_cross_trial_summary"
 STEP_OUTPUT_PATTERNS = (
     "all_trials_roi_summary.csv",
     "all_trials_roi_features.csv",
@@ -23,12 +25,16 @@ STEP_OUTPUT_PATTERNS = (
     "all_trials_event_table.csv",
     "all_trials_stim_response_summary.csv",
     "all_trials_stim_response_table.csv",
+    "all_trials_stim_slice_summary.csv",
+    "all_trials_stim_slice_roi_summary.csv",
+    "all_trials_stim_slice_response_table.csv",
     "all_trials_angle_tuning_summary.csv",
     "all_trials_angle_response_table.csv",
     "all_trials_cluster_summary.csv",
     "all_trials_cluster_labels.csv",
     "all_trials_embedding_summary.csv",
     "all_trials_pca_embedding.csv",
+    "trial_context_summary.csv",
     "top_responsive_rois.csv",
     "top_event_rois.csv",
     "top_angle_selective_rois.csv",
@@ -59,6 +65,10 @@ def step_output_root(output_root: Path) -> Path:
     return output_root / STEP_NAME
 
 
+def metadata_output_root(output_root: Path) -> Path:
+    return output_root / "00_trial_metadata"
+
+
 def clean_step_outputs(out_dir: Path) -> int:
     if not out_dir.exists():
         return 0
@@ -71,6 +81,68 @@ def clean_step_outputs(out_dir: Path) -> int:
                 path.unlink()
             removed += 1
     return removed
+
+
+def write_trial_metadata_table(output_root: Path, trial_context: pd.DataFrame) -> dict[str, object]:
+    out_dir = metadata_output_root(output_root)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    if trial_context.empty:
+        empty = pd.DataFrame(
+            columns=[
+                "raw_trial_id",
+                "canonical_trial_id_proposed",
+                "canonical_group_id",
+                "canonical_name_status",
+            ]
+        )
+        empty.to_csv(out_dir / "trial_metadata.csv", index=False)
+        summary = {
+            "status": "ok",
+            "n_trials": 0,
+            "n_changed_names": 0,
+            "metadata_csv": str(out_dir / "trial_metadata.csv"),
+        }
+        (out_dir / "trial_metadata_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        return summary
+
+    metadata = trial_context.rename(columns={"trial_id": "raw_trial_id"}).copy()
+    metadata["canonical_group_id"] = (
+        metadata["canonical_trial_id_proposed"].astype(str).str.replace(r"_rep\d{4}$", "", regex=True)
+    )
+    metadata["raw_trial_id_changed"] = (
+        metadata["raw_trial_id"].astype(str) != metadata["canonical_trial_id_proposed"].astype(str)
+    )
+    metadata["canonical_name_status"] = "proposed_only"
+    cols = [
+        "raw_trial_id",
+        "canonical_trial_id_proposed",
+        "canonical_group_id",
+        "canonical_name_status",
+        "raw_trial_id_changed",
+        "experiment_note_available",
+        "note_date",
+        "note_file",
+        "note_text",
+        "planned_stimulus_mode",
+        "measured_stimulus_mode",
+        "measured_has_stimulus",
+        "measured_has_AoLP",
+        "note_polarization_setup",
+        "chloride_condition",
+        "reduced_chloride",
+        "analysis_branch_key",
+    ]
+    keep = [col for col in cols if col in metadata.columns]
+    metadata = metadata[keep].sort_values(["note_date", "raw_trial_id"], kind="stable").reset_index(drop=True)
+    metadata.to_csv(out_dir / "trial_metadata.csv", index=False)
+    summary = {
+        "status": "ok",
+        "n_trials": int(len(metadata)),
+        "n_changed_names": int(metadata["raw_trial_id_changed"].fillna(False).sum()),
+        "metadata_csv": str(out_dir / "trial_metadata.csv"),
+    }
+    (out_dir / "trial_metadata_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    return summary
 
 
 def read_csv(path: Path) -> pd.DataFrame:
@@ -87,7 +159,7 @@ def read_csv(path: Path) -> pd.DataFrame:
 
 def collect_trial_tables(root: Path, pattern: str) -> pd.DataFrame:
     rows = []
-    for path in sorted(root.glob(f"*/{pattern}")):
+    for path in sorted(root.rglob(pattern)):
         df = read_csv(path)
         if not df.empty:
             rows.append(df)
@@ -106,17 +178,24 @@ def build_qc_table(output_root: Path) -> tuple[pd.DataFrame, dict[str, pd.DataFr
     tables["events"] = read_csv(output_root / "07_events" / "event_summary.csv")
     tables["stim"] = read_csv(output_root / "08_stim_response" / "stim_response_summary.csv")
     tables["angle"] = read_csv(output_root / "09_angle_tuning" / "angle_tuning_summary.csv")
-    tables["features"] = read_csv(output_root / "10_population_features" / "population_feature_summary.csv")
-    tables["similarity"] = read_csv(output_root / "11_population_similarity" / "population_similarity_summary.csv")
-    tables["clusters"] = read_csv(output_root / "12_hierarchical_clustering" / "hierarchical_clustering_summary.csv")
-    tables["leiden"] = read_csv(output_root / "13_leiden" / "leiden_summary.csv")
-    tables["embedding"] = read_csv(output_root / "14_dimensionality_reduction" / "embedding_summary.csv")
-    tables["roi_features"] = collect_trial_tables(output_root / "10_population_features", "*_roi_feature_matrix.csv")
+    tables["features"] = read_csv(output_root / "11_population_features" / "population_feature_summary.csv")
+    tables["slices"] = read_csv(output_root / "12_stimulus_slice_features" / "stimulus_slice_feature_summary.csv")
+    tables["similarity"] = read_csv(output_root / "13_population_similarity" / "population_similarity_summary.csv")
+    tables["clusters"] = read_csv(output_root / "14_hierarchical_clustering" / "hierarchical_clustering_summary.csv")
+    tables["leiden"] = read_csv(output_root / "15_leiden" / "leiden_summary.csv")
+    tables["embedding"] = read_csv(output_root / "16_dimensionality_reduction" / "embedding_summary.csv")
+    tables["roi_features"] = collect_trial_tables(output_root / "11_population_features", "*_roi_feature_matrix.csv")
     tables["event_table"] = collect_trial_tables(output_root / "07_events", "*_event_table.csv")
     tables["stim_response_table"] = collect_trial_tables(output_root / "08_stim_response", "*_stim_response_table.csv")
+    tables["stim_slice_table"] = collect_trial_tables(output_root / "12_stimulus_slice_features", "*_stim_slice_response_table.csv")
+    tables["stim_slice_roi_summary"] = collect_trial_tables(output_root / "12_stimulus_slice_features", "*_stim_slice_roi_summary.csv")
     tables["angle_response_table"] = collect_trial_tables(output_root / "09_angle_tuning", "*_angle_response_table.csv")
-    tables["cluster_labels"] = collect_trial_tables(output_root / "12_hierarchical_clustering", "*_hierarchical_cluster_labels.csv")
-    tables["pca_embedding"] = collect_trial_tables(output_root / "14_dimensionality_reduction", "*_pca_embedding.csv")
+    tables["cluster_labels"] = collect_trial_tables(output_root / "14_hierarchical_clustering", "*_hierarchical_cluster_labels.csv")
+    tables["pca_embedding"] = collect_trial_tables(output_root / "16_dimensionality_reduction", "*_pca_embedding.csv")
+    excluded_trial_ids = load_excluded_trial_ids(output_root)
+    if excluded_trial_ids:
+        for key, table in list(tables.items()):
+            tables[key] = filter_table_by_excluded_trials(table, excluded_trial_ids)
 
     trial_ids = sorted(set().union(*(set(df["trial_id"].dropna().astype(str)) for df in tables.values() if "trial_id" in df.columns)))
     qc_rows = []
@@ -125,9 +204,11 @@ def build_qc_table(output_root: Path) -> tuple[pd.DataFrame, dict[str, pd.DataFr
         dff = tables["dff"][tables["dff"]["trial_id"].astype(str) == trial_id] if "trial_id" in tables["dff"] else pd.DataFrame()
         events = tables["events"][tables["events"]["trial_id"].astype(str) == trial_id] if "trial_id" in tables["events"] else pd.DataFrame()
         stim = tables["stim"][tables["stim"]["trial_id"].astype(str) == trial_id] if "trial_id" in tables["stim"] else pd.DataFrame()
+        slices = tables["slices"][tables["slices"]["trial_id"].astype(str) == trial_id] if "trial_id" in tables["slices"] else pd.DataFrame()
         angle = tables["angle"][tables["angle"]["trial_id"].astype(str) == trial_id] if "trial_id" in tables["angle"] else pd.DataFrame()
         clusters = tables["clusters"][tables["clusters"]["trial_id"].astype(str) == trial_id] if "trial_id" in tables["clusters"] else pd.DataFrame()
         leiden = tables["leiden"][tables["leiden"]["trial_id"].astype(str) == trial_id] if "trial_id" in tables["leiden"] else pd.DataFrame()
+        embedding = tables["embedding"][tables["embedding"]["trial_id"].astype(str) == trial_id] if "trial_id" in tables["embedding"] else pd.DataFrame()
 
         row["n_roi"] = int(dff["n_roi_selected"].iloc[0]) if not dff.empty and "n_roi_selected" in dff else np.nan
         row["n_frames"] = int(dff["n_frames"].iloc[0]) if not dff.empty and "n_frames" in dff else np.nan
@@ -136,6 +217,9 @@ def build_qc_table(output_root: Path) -> tuple[pd.DataFrame, dict[str, pd.DataFr
         row["n_stim_events"] = int(stim["n_stim_events"].iloc[0]) if not stim.empty and "n_stim_events" in stim else np.nan
         row["n_responsive_roi"] = int(stim["n_responsive_roi"].iloc[0]) if not stim.empty and "n_responsive_roi" in stim else np.nan
         row["fraction_responsive"] = row["n_responsive_roi"] / row["n_roi"] if row.get("n_roi", 0) else np.nan
+        row["n_slice_responsive_roi"] = int(slices["n_responsive_roi"].iloc[0]) if not slices.empty and "n_responsive_roi" in slices else np.nan
+        row["n_evoked_slices"] = int(slices["n_evoked_slices"].iloc[0]) if not slices.empty and "n_evoked_slices" in slices else np.nan
+        row["fraction_slice_responsive"] = row["n_slice_responsive_roi"] / row["n_roi"] if row.get("n_roi", 0) else np.nan
         row["n_angle_selective_roi"] = int(angle["n_angle_selective_roi"].iloc[0]) if not angle.empty and "n_angle_selective_roi" in angle else np.nan
         row["fraction_angle_selective"] = row["n_angle_selective_roi"] / row["n_roi"] if row.get("n_roi", 0) else np.nan
         row["n_hierarchical_clusters"] = int(clusters["n_clusters"].iloc[0]) if not clusters.empty and "n_clusters" in clusters else np.nan
@@ -146,8 +230,12 @@ def build_qc_table(output_root: Path) -> tuple[pd.DataFrame, dict[str, pd.DataFr
             warnings.append("no_roi")
         if row.get("n_stim_events", np.nan) == 0:
             warnings.append("no_stim")
+        if not clusters.empty and str(clusters.get("status", pd.Series([""])).iloc[0]) == "skipped":
+            warnings.append("hierarchical_clustering_skipped")
         if not leiden.empty and str(leiden.get("status", pd.Series([""])).iloc[0]) == "skipped":
             warnings.append("leiden_skipped")
+        if not embedding.empty and str(embedding.get("status", pd.Series([""])).iloc[0]) == "skipped":
+            warnings.append("embedding_skipped")
         row["qc_warnings"] = ";".join(warnings)
         qc_rows.append(row)
     return pd.DataFrame(qc_rows), tables
@@ -238,20 +326,30 @@ def main(argv: list[str] | None = None) -> int:
     out_root.mkdir(parents=True, exist_ok=True)
 
     qc, tables = build_qc_table(output_root)
+    trial_context = build_trial_context_table(output_root, qc, tables)
+    if not trial_context.empty:
+        qc = qc.merge(trial_context, on="trial_id", how="left")
+        qc = merge_context_warnings(qc)
+    tables["trial_context"] = trial_context
     tables["dff"].to_csv(out_root / "all_trials_roi_summary.csv", index=False)
     tables["roi_features"].to_csv(out_root / "all_trials_roi_features.csv", index=False)
     tables["events"].to_csv(out_root / "all_trials_event_summary.csv", index=False)
     tables["event_table"].to_csv(out_root / "all_trials_event_table.csv", index=False)
     tables["stim"].to_csv(out_root / "all_trials_stim_response_summary.csv", index=False)
     tables["stim_response_table"].to_csv(out_root / "all_trials_stim_response_table.csv", index=False)
+    tables["slices"].to_csv(out_root / "all_trials_stim_slice_summary.csv", index=False)
+    tables["stim_slice_roi_summary"].to_csv(out_root / "all_trials_stim_slice_roi_summary.csv", index=False)
+    tables["stim_slice_table"].to_csv(out_root / "all_trials_stim_slice_response_table.csv", index=False)
     tables["angle"].to_csv(out_root / "all_trials_angle_tuning_summary.csv", index=False)
     tables["angle_response_table"].to_csv(out_root / "all_trials_angle_response_table.csv", index=False)
     tables["clusters"].to_csv(out_root / "all_trials_cluster_summary.csv", index=False)
     tables["cluster_labels"].to_csv(out_root / "all_trials_cluster_labels.csv", index=False)
     tables["embedding"].to_csv(out_root / "all_trials_embedding_summary.csv", index=False)
     tables["pca_embedding"].to_csv(out_root / "all_trials_pca_embedding.csv", index=False)
+    tables["trial_context"].to_csv(out_root / "trial_context_summary.csv", index=False)
     qc.to_csv(out_root / "cross_trial_qc_summary.csv", index=False)
     write_top_roi_tables(tables, out_root, top_n=args.top_n_roi)
+    trial_metadata_summary = write_trial_metadata_table(output_root, trial_context)
 
     save_bar(qc, "n_roi", out_root / "cross_trial_roi_count.png", "ROI count by trial", "ROI count", args.dpi)
     save_bar(qc, "fraction_responsive", out_root / "cross_trial_responsive_fraction.png", "Responsive fraction by trial", "fraction", args.dpi)
@@ -262,11 +360,19 @@ def main(argv: list[str] | None = None) -> int:
         "n_trials": int(len(qc)),
         "n_roi_total": int(pd.to_numeric(qc.get("n_roi", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()),
         "n_trials_with_stim": int((pd.to_numeric(qc.get("n_stim_events", pd.Series(dtype=float)), errors="coerce").fillna(0) > 0).sum()),
+        "n_trials_planned_pulse": int((qc.get("planned_stimulus_mode", pd.Series(dtype=str)).fillna("").astype(str) == "pulse").sum()),
+        "n_trials_planned_sustain": int((qc.get("planned_stimulus_mode", pd.Series(dtype=str)).fillna("").astype(str) == "sustain").sum()),
+        "n_trials_with_AoLP": int((qc.get("measured_has_AoLP", pd.Series(dtype=str)).fillna("").astype(str) == "yes").sum()),
+        "n_trials_reduced_chloride": int((qc.get("reduced_chloride", pd.Series(dtype=str)).fillna("").astype(str) == "yes").sum()),
         "n_event_rows": int(len(tables["event_table"])),
         "n_stim_response_rows": int(len(tables["stim_response_table"])),
+        "n_stim_slice_response_rows": int(len(tables["stim_slice_table"])),
+        "n_evoked_slices": int(pd.to_numeric(qc.get("n_evoked_slices", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()),
         "n_angle_response_rows": int(len(tables["angle_response_table"])),
         "top_n_roi": int(args.top_n_roi),
         "output_root": str(out_root),
+        "trial_metadata_csv": str(metadata_output_root(output_root) / "trial_metadata.csv"),
+        "n_trial_metadata_rows": int(trial_metadata_summary["n_trials"]),
     }
     (out_root / "cross_trial_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     LOGGER.info("Summary:")

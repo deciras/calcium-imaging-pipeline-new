@@ -156,18 +156,18 @@ def run_fiji_task(
         command.append(f"--mem={fiji_memory}")
     command.extend(["--run", str(worker_script), args])
 
-    LOGGER.info("Launching Fiji")
-    LOGGER.info("  Fiji binary  : %s", fiji_bin)
-    LOGGER.info("  Worker script: %s", worker_script)
-    LOGGER.info("  Original root: %s", data_root)
-    LOGGER.info("  Output root  : %s", output_root)
-    LOGGER.info("  Extension    : %s", extension)
-    LOGGER.info("  Action       : %s", action)
-    LOGGER.info("  Fiji memory  : %s", fiji_memory or "Fiji default")
-    LOGGER.info("  Projection   : %s", projection_mode)
-    LOGGER.info("  Metadata mode: %s", metadata_mode)
-    LOGGER.info("  Stim export  : %s", stim_export_mode)
-    LOGGER.info("  Command      : %s", subprocess.list2cmdline(command))
+    LOGGER.info("正在启动 Fiji")
+    LOGGER.info("  Fiji 可执行文件：%s", fiji_bin)
+    LOGGER.info("  Worker 脚本：%s", worker_script)
+    LOGGER.info("  原始数据目录：%s", data_root)
+    LOGGER.info("  输出根目录：%s", output_root)
+    LOGGER.info("  扩展名：%s", extension)
+    LOGGER.info("  冲突处理方式：%s", action)
+    LOGGER.info("  Fiji 内存：%s", fiji_memory or "Fiji 默认值")
+    LOGGER.info("  投影模式：%s", projection_mode)
+    LOGGER.info("  Metadata 模式：%s", metadata_mode)
+    LOGGER.info("  刺激导出模式：%s", stim_export_mode)
+    LOGGER.info("  命令：%s", subprocess.list2cmdline(command))
 
     process = subprocess.Popen(
         command,
@@ -192,19 +192,19 @@ def run_fiji_task(
             sys.stdout.flush()
         process.wait()
     except KeyboardInterrupt:
-        LOGGER.error("Interrupted by user. Terminating Fiji process.")
+        LOGGER.error("用户中断，正在终止 Fiji 进程。")
         process.terminate()
         process.wait()
         raise
 
     if process.returncode == 0 and not saw_error:
-        LOGGER.info("Fiji task completed successfully.")
+        LOGGER.info("Fiji 任务已成功完成。")
         return True
 
     if saw_error:
-        LOGGER.error("Fiji task printed error markers; treating this step as failed.")
+        LOGGER.error("Fiji 输出中检测到错误标记；将此步骤视为失败。")
     else:
-        LOGGER.error("Fiji task failed with return code %s.", process.returncode)
+        LOGGER.error("Fiji 任务失败，退出代码为 %s。", process.returncode)
     return False
 
 
@@ -305,10 +305,10 @@ def main(argv: list[str] | None = None) -> int:
 
     data_root = args.data_root.expanduser().resolve()
     if not data_root.exists():
-        LOGGER.error("Data root does not exist: %s", data_root)
+        LOGGER.error("数据根目录不存在：%s", data_root)
         return 1
     if not data_root.is_dir():
-        LOGGER.error("Data root is not a folder: %s", data_root)
+        LOGGER.error("数据根目录不是文件夹：%s", data_root)
         return 1
 
     output_root = (
@@ -318,20 +318,20 @@ def main(argv: list[str] | None = None) -> int:
     )
     worker_script = args.worker_script.expanduser().resolve()
     if not worker_script.exists():
-        LOGGER.error("Worker script not found: %s", worker_script)
+        LOGGER.error("未找到 worker 脚本：%s", worker_script)
         return 1
 
     fiji_bin = find_fiji_bin(args.fiji_bin)
     if fiji_bin is None:
         if args.dry_run:
             LOGGER.warning(
-                "Fiji executable was not found. Dry-run will still show the intended arguments."
+                "未找到 Fiji 可执行文件，但 dry-run 仍会展示计划使用的参数。"
             )
-            LOGGER.info("Data root  : %s", data_root)
-            LOGGER.info("Output root: %s", output_root)
-            LOGGER.info("Worker     : %s", worker_script)
+            LOGGER.info("数据根目录：%s", data_root)
+            LOGGER.info("输出根目录：%s", output_root)
+            LOGGER.info("Worker 脚本：%s", worker_script)
             LOGGER.info(
-                "Fiji args   : %s",
+                "Fiji 参数：%s",
                 build_fiji_args(
                     default_original_root(data_root),
                     output_root,
@@ -345,7 +345,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 0
         LOGGER.error(
-            "Fiji executable was not found. Install Fiji, set FIJI_BIN, or pass --fiji-bin."
+            "未找到 Fiji 可执行文件。请安装 Fiji，设置 FIJI_BIN，或传入 --fiji-bin。"
         )
         return 1
 
@@ -370,11 +370,11 @@ def main(argv: list[str] | None = None) -> int:
         command_preview.insert(2, f"--mem={args.fiji_memory}")
 
     if args.dry_run:
-        LOGGER.info("Dry-run only. Fiji will not be launched.")
-        LOGGER.info("Data root  : %s", data_root)
-        LOGGER.info("Original   : %s", default_original_root(data_root))
-        LOGGER.info("Output root: %s", output_root)
-        LOGGER.info("Command    : %s", subprocess.list2cmdline(command_preview))
+        LOGGER.info("仅执行 dry-run，不会真正启动 Fiji。")
+        LOGGER.info("数据根目录：%s", data_root)
+        LOGGER.info("原始数据目录：%s", default_original_root(data_root))
+        LOGGER.info("输出根目录：%s", output_root)
+        LOGGER.info("命令：%s", subprocess.list2cmdline(command_preview))
         return 0
 
     output_root.mkdir(parents=True, exist_ok=True)

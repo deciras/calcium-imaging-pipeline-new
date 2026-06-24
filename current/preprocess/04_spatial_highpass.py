@@ -156,11 +156,11 @@ def clean_step_outputs(out_dir: Path) -> int:
             if path.is_dir():
                 shutil.rmtree(path)
                 removed += 1
-                LOGGER.info("Removed old step-04 folder: %s", path)
+                LOGGER.info("已删除旧的 step-04 文件夹：%s", path)
             elif path.is_file() or path.is_symlink():
                 path.unlink()
                 removed += 1
-                LOGGER.info("Removed old step-04 file: %s", path)
+                LOGGER.info("已删除旧的 step-04 文件：%s", path)
     return removed
 
 
@@ -169,7 +169,7 @@ def copy_if_exists(src: Path | None, dst: Path) -> bool:
         return False
     dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, dst)
-    LOGGER.info("Copied %s -> %s", src, dst)
+    LOGGER.info("已复制 %s -> %s", src, dst)
     return True
 
 
@@ -320,7 +320,7 @@ def process_trial(
         return "skipped"
 
     if dry_run:
-        LOGGER.info("[dry-run] Would high-pass %s -> %s", trial.movie_path, out_dir)
+        LOGGER.info("[dry-run] 将执行高通处理 %s -> %s", trial.movie_path, out_dir)
         return "processed"
 
     if action == "overwrite":
@@ -350,7 +350,7 @@ def process_trial(
     }
     with (out_dir / "spatial_highpass_summary.json").open("w", encoding="utf-8") as handle:
         json.dump(summary, handle, indent=2)
-    LOGGER.info("Saved spatial high-pass movie: %s", out_movie)
+    LOGGER.info("已保存空间高通电影：%s", out_movie)
     return "processed"
 
 
@@ -380,16 +380,16 @@ def main(argv: list[str] | None = None) -> int:
 
     if not input_root.exists():
         if args.dry_run:
-            LOGGER.warning("Input root does not exist yet: %s", input_root)
+            LOGGER.warning("输入根目录尚不存在：%s", input_root)
             return 0
-        LOGGER.error("Input root does not exist: %s", input_root)
+        LOGGER.error("输入根目录不存在：%s", input_root)
         return 1
 
     trials = discover_trials(input_root)
     summary = RunSummary(found=len(trials))
-    LOGGER.info("Input root : %s", input_root)
-    LOGGER.info("Output root: %s", out_root)
-    LOGGER.info("Found %d trial(s) with corrected movies.", len(trials))
+    LOGGER.info("输入根目录：%s", input_root)
+    LOGGER.info("输出根目录：%s", out_root)
+    LOGGER.info("找到 %d 个含校正后电影的 trial。", len(trials))
 
     for trial in trials:
         out_dir = trial_output_dir(out_root, trial)
@@ -410,16 +410,16 @@ def main(argv: list[str] | None = None) -> int:
 
         if status == "skipped":
             summary.skipped += 1
-            LOGGER.info("[skip] %s", trial.trial_id)
+            LOGGER.info("[跳过] %s", trial.trial_id)
         else:
             summary.processed += 1
-            LOGGER.info("[ok] %s", trial.trial_id)
+            LOGGER.info("[完成] %s", trial.trial_id)
 
-    LOGGER.info("Summary:")
-    LOGGER.info("  found: %d", summary.found)
-    LOGGER.info("  processed or would process: %d", summary.processed)
-    LOGGER.info("  skipped: %d", summary.skipped)
-    LOGGER.info("  failed: %d", summary.failed)
+    LOGGER.info("汇总：")
+    LOGGER.info("  找到：%d", summary.found)
+    LOGGER.info("  已处理或将处理：%d", summary.processed)
+    LOGGER.info("  跳过：%d", summary.skipped)
+    LOGGER.info("  失败：%d", summary.failed)
     return 1 if summary.failed else 0
 
 

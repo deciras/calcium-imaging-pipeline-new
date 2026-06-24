@@ -173,7 +173,13 @@ def circular_stats(angles_deg: np.ndarray, responses: np.ndarray, period: float)
     return float(preferred), float(strength)
 
 
-def compute_angle_tables(response_table: pd.DataFrame, angle_period: float, z_threshold: float) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def compute_angle_tables(
+    response_table: pd.DataFrame,
+    angle_period: float,
+    z_threshold: float,
+    osi_threshold: float,
+    min_reliability: float,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     if response_table.empty or "pol_angle" not in response_table.columns:
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
@@ -202,6 +208,7 @@ def compute_angle_tables(response_table: pd.DataFrame, angle_period: float, z_th
         best_idx = group["mean_response"].idxmax()
         preferred_angle = float(group.loc[best_idx, "pol_angle"])
         preferred_response = float(group.loc[best_idx, "mean_response"])
+        preferred_reliability = float(group.loc[best_idx, "reliability"])
         target_orth = (preferred_angle + angle_period / 2.0) % angle_period
         angle_distance = np.abs(((group["pol_angle"] - target_orth + angle_period / 2.0) % angle_period) - angle_period / 2.0)
         orthogonal_response = float(group.loc[angle_distance.idxmin(), "mean_response"])
@@ -214,11 +221,17 @@ def compute_angle_tables(response_table: pd.DataFrame, angle_period: float, z_th
                 "preferred_angle": preferred_angle,
                 "vector_preferred_angle": vector_pref,
                 "preferred_response": preferred_response,
+                "preferred_reliability": preferred_reliability,
                 "orthogonal_response": orthogonal_response,
                 "OSI": float(osi) if np.isfinite(osi) else np.nan,
                 "vector_strength": vector_strength,
                 "circular_variance": 1.0 - vector_strength if np.isfinite(vector_strength) else np.nan,
-                "angle_selective": bool(np.isfinite(osi) and osi >= 0.3 and preferred_response > 0),
+                "angle_selective": bool(
+                    np.isfinite(osi)
+                    and osi >= osi_threshold
+                    and preferred_response > 0
+                    and preferred_reliability >= min_reliability
+                ),
             }
         )
     preferred = pd.DataFrame(preferred_rows)
@@ -304,7 +317,13 @@ def process_trial(trial: TrialInput, out_dir: Path, args: argparse.Namespace) ->
     out_dir.mkdir(parents=True, exist_ok=True)
     copy_sidecar_outputs(trial, out_dir)
     response_table = read_response_table(trial.response_table_path)
-    angle_table, summary, preferred = compute_angle_tables(response_table, args.angle_period, args.z_threshold)
+    angle_table, summary, preferred = compute_angle_tables(
+        response_table,
+        args.angle_period,
+        args.z_threshold,
+        args.osi_threshold,
+        args.min_reliability,
+    )
 
     angle_table.to_csv(out_dir / f"{trial.trial_id}_angle_response_table.csv", index=False)
     summary.to_csv(out_dir / f"{trial.trial_id}_angle_tuning_summary.csv", index=False)
@@ -321,6 +340,9 @@ def process_trial(trial: TrialInput, out_dir: Path, args: argparse.Namespace) ->
         "n_roi": int(len(preferred)),
         "n_angle_selective_roi": int(preferred["angle_selective"].sum()) if "angle_selective" in preferred else 0,
         "angle_period": float(args.angle_period),
+        "z_threshold": float(args.z_threshold),
+        "osi_threshold": float(args.osi_threshold),
+        "min_reliability": float(args.min_reliability),
     }
     (out_dir / f"{trial.trial_id}_angle_tuning_summary.json").write_text(json.dumps(out, indent=2), encoding="utf-8")
     return "processed", out
@@ -335,7 +357,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--action", choices=("skip", "overwrite"), default="skip")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--angle-period", type=float, choices=(180.0, 360.0), default=180.0)
-    parser.add_argument("--z-threshold", type=float, default=2.0)
+    parser.add_argument("--z-threshold", type=float, default=3.0)
+    parser.add_argument("--osi-threshold", type=float, default=0.3)
+    parser.add_argument("--min-reliability", type=float, default=0.5)
     parser.add_argument("--dpi", type=int, default=150)
     parser.add_argument("--verbose", action="store_true")
     return parser

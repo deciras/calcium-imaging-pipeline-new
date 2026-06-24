@@ -47,9 +47,12 @@ OUTPUT_SUFFIXES = (
     "_stim_schematic.pdf",
     "_stim_pulse_trace.png",
     "_stim_pulse_trace.pdf",
+    "_stim_event_slices.png",
+    "_stim_event_slices.pdf",
     "_stim_map.csv",
     "_stim_events.csv",
     "_stim_pulse_events.csv",
+    "_stim_block_diagnostics.csv",
 )
 
 
@@ -113,12 +116,13 @@ def default_input_root(data_root: Path, output_root: Path) -> Path:
 
 def default_stim_log_root(data_root: Path) -> Path | None:
     candidates = [
+        data_root / "00_stim_logs_raw",
         data_root / "test_dataset_motor_rotation",
         data_root / "stim_logs",
         data_root / "motor_rotation",
     ]
     for candidate in candidates:
-        if candidate.exists() and any(candidate.glob("timestamp_log_*.csv")):
+        if candidate.exists() and any(candidate.rglob("timestamp_log_*.csv")):
             return candidate
     return None
 
@@ -142,9 +146,13 @@ def output_paths(out_dir: Path, trial_id: str) -> dict[str, Path]:
         "stim_schematic_pdf": out_dir / f"{trial_id}_stim_schematic.pdf",
         "stim_pulse_trace": out_dir / f"{trial_id}_stim_pulse_trace.png",
         "stim_pulse_trace_pdf": out_dir / f"{trial_id}_stim_pulse_trace.pdf",
+        "stim_event_slices": out_dir / f"{trial_id}_stim_event_slices.png",
+        "stim_event_slices_pdf": out_dir / f"{trial_id}_stim_event_slices.pdf",
         "stim_map": out_dir / f"{trial_id}_stim_map.csv",
         "stim_events": out_dir / f"{trial_id}_stim_events.csv",
         "stim_pulse_events": out_dir / f"{trial_id}_stim_pulse_events.csv",
+        "stim_block_diagnostics": out_dir / f"{trial_id}_stim_block_diagnostics.csv",
+        "stim_event_slices_dir": out_dir / f"{trial_id}_stim_event_slices",
     }
 
 
@@ -189,12 +197,22 @@ def clean_step_outputs(out_dir: Path, trial_id: str) -> int:
     if not out_dir.exists():
         return removed
 
+    paths = output_paths(out_dir, trial_id)
+    slices_dir = paths["stim_event_slices_dir"]
+    if slices_dir.exists() and slices_dir.is_dir():
+        for child in sorted(slices_dir.glob("*")):
+            if child.is_file():
+                child.unlink()
+                removed += 1
+        slices_dir.rmdir()
+        LOGGER.info("已删除旧的 step-02 文件夹：%s", slices_dir)
+
     for suffix in OUTPUT_SUFFIXES:
         path = out_dir / f"{trial_id}{suffix}"
         if path.exists() and path.is_file():
             path.unlink()
             removed += 1
-            LOGGER.info("Removed old step-02 file: %s", path)
+            LOGGER.info("已删除旧的 step-02 文件：%s", path)
     return removed
 
 
@@ -325,17 +343,18 @@ def discover_stim_protocols(stim_log_root: Path | None) -> list[StimProtocol]:
     if stim_log_root is None:
         return []
     if not stim_log_root.exists():
-        LOGGER.warning("Stim log root does not exist: %s", stim_log_root)
+        LOGGER.warning("刺激日志根目录不存在：%s", stim_log_root)
         return []
 
     protocols: list[StimProtocol] = []
-    for timestamp_log_path in sorted(stim_log_root.glob("timestamp_log_*.csv")):
+    for timestamp_log_path in sorted(stim_log_root.rglob("timestamp_log_*.csv")):
         run_id = parse_run_id(timestamp_log_path, "timestamp_log_", ".csv")
         if not run_id:
             continue
 
-        config_path = stim_log_root / f"experiment_config_{run_id}.json"
-        stim_map_path = stim_log_root / f"stim_map_{run_id}.csv"
+        log_dir = timestamp_log_path.parent
+        config_path = log_dir / f"experiment_config_{run_id}.json"
+        stim_map_path = log_dir / f"stim_map_{run_id}.csv"
         config = read_json_if_exists(config_path if config_path.exists() else None)
         mcu_config = config.get("mcu_config", {})
         stim_mode = str(mcu_config.get("stim_mode", "") or "")
@@ -360,7 +379,7 @@ def discover_stim_protocols(stim_log_root: Path | None) -> list[StimProtocol]:
             )
         )
 
-    LOGGER.info("Found %d stimulus protocol log(s).", len(protocols))
+    LOGGER.info("找到 %d 个刺激协议日志。", len(protocols))
     return protocols
 
 
@@ -483,7 +502,7 @@ def discover_trials(input_root: Path, data_root: Path) -> list[TrialInput]:
         input_dir = stim_path.parent
         metadata_path = find_first_existing(input_dir, ("*_metadata.json",))
         if metadata_path is None:
-            LOGGER.warning("Skipping %s because metadata JSON is missing.", input_dir)
+            LOGGER.warning("由于缺少 metadata JSON，跳过 %s。", input_dir)
             continue
 
         trial_id = input_dir.name
@@ -633,7 +652,7 @@ def read_raw_analog_trace(raw_stim_dir: Path, raw_z_strategy: str) -> AnalogTrac
     per_z_rows: list[np.ndarray] = []
     for index, path in enumerate(files):
         if index == 0 or (index + 1) == len(files) or (index + 1) % 200 == 0:
-            LOGGER.debug("Reading raw stim analog %s (%d/%d)", path.name, index + 1, len(files))
+            LOGGER.debug("正在读取原始刺激模拟信号 %s（%d/%d）", path.name, index + 1, len(files))
         arr = tiff.imread(path)
         if arr.ndim == 2:
             z_means = np.asarray([float(np.nanmean(arr))], dtype=float)
@@ -1039,6 +1058,13 @@ def build_summary_row(
         "pol_angle_list": "",
         "stim_protocol_id": protocol.run_id if protocol is not None else "",
         "stim_protocol_file": str(protocol.timestamp_log_path) if protocol is not None else "",
+        "stim_protocol_dir": str(protocol.timestamp_log_path.parent) if protocol is not None else "",
+        "trial_start_estimate": trial_start_estimate.isoformat() if trial_start_estimate is not None else "",
+        "protocol_trial_start_estimate": (
+            protocol.estimated_trial_start.isoformat()
+            if protocol is not None and protocol.estimated_trial_start is not None
+            else ""
+        ),
         "protocol_match_delta_sec": round(float(protocol_match_delta_sec), 3)
         if protocol_match_delta_sec is not None
         else "",
@@ -1283,6 +1309,179 @@ def build_pulse_events_rows(
     return rows
 
 
+def block_judgement_rows(
+    stim_blocks: list[dict],
+    events_rows: list[dict],
+    tolerance_sec: float = 0.35,
+) -> list[dict]:
+    rows: list[dict] = []
+    for block_index, block in enumerate(stim_blocks, start=1):
+        start = _as_float_or_none(block.get("start_time_sec"))
+        end = _as_float_or_none(block.get("end_time_sec"))
+        duration = _as_float_or_none(block.get("duration_sec"))
+        matched_event = None
+        for event in events_rows:
+            analog_start = _as_float_or_none(event.get("analog_detected_start_time_sec"))
+            analog_end = _as_float_or_none(event.get("analog_detected_end_time_sec"))
+            event_start = _as_float_or_none(event.get("start_time_sec"))
+            if start is None:
+                continue
+            if analog_start is not None and abs(analog_start - start) <= tolerance_sec:
+                matched_event = event
+                break
+            if analog_end is not None and end is not None and abs(analog_end - end) <= tolerance_sec:
+                matched_event = event
+                break
+            if event_start is not None and abs(event_start - start) <= tolerance_sec:
+                matched_event = event
+                break
+        rows.append(
+            {
+                "block_index": block_index,
+                "stim_index_detected": block.get("stim_index", block_index),
+                "start_time_sec": block.get("start_time_sec", ""),
+                "end_time_sec": block.get("end_time_sec", ""),
+                "duration_sec": block.get("duration_sec", duration if duration is not None else ""),
+                "final_is_stim_event": 1 if matched_event is not None else 0,
+                "matched_final_stim_index": matched_event.get("stim_index", "") if matched_event is not None else "",
+                "matched_timing_source": matched_event.get("timing_source", "") if matched_event is not None else "",
+                "matched_stim_type": matched_event.get("stim_type", "") if matched_event is not None else "",
+                "matched_pol_angle": matched_event.get("pol_angle", "") if matched_event is not None else "",
+            }
+        )
+    return rows
+
+
+def trial_date_label(trial_id: str, summary_row: dict | None = None) -> str:
+    if summary_row is not None:
+        trial_start_estimate = str(summary_row.get("trial_start_estimate", "") or "").strip()
+        if trial_start_estimate:
+            return trial_start_estimate[:10].replace("-", "")
+    match = re.match(r"^(\d{8})", trial_id)
+    if match:
+        return match.group(1)
+    return ""
+
+
+def build_block_summary_rows(
+    summaries: list[dict],
+    block_rows_by_trial: dict[str, list[dict]],
+) -> list[dict]:
+    summary_by_trial = {str(row.get("trialID", "")): row for row in summaries}
+    rows: list[dict] = []
+    for trial_id in sorted(block_rows_by_trial):
+        block_rows = block_rows_by_trial[trial_id]
+        summary_row = summary_by_trial.get(trial_id, {})
+        n_blocks_total = len(block_rows)
+        n_final_one = sum(int(row.get("final_is_stim_event", 0) or 0) for row in block_rows)
+        rows.append(
+            {
+                "date": trial_date_label(trial_id, summary_row),
+                "trialID": trial_id,
+                "n_blocks_total": n_blocks_total,
+                "n_final_is_1": n_final_one,
+                "n_final_is_0": n_blocks_total - n_final_one,
+                "stim_type": summary_row.get("stim_type", ""),
+                "number_of_stim": summary_row.get("number_of_stim", ""),
+                "stim_protocol_id": summary_row.get("stim_protocol_id", ""),
+                "protocol_match_delta_sec": summary_row.get("protocol_match_delta_sec", ""),
+            }
+        )
+    return rows
+
+
+def plot_stim_event_slice_panels(
+    brightness_trace: np.ndarray,
+    time_axis: np.ndarray,
+    stim_blocks: list[dict],
+    block_rows: list[dict],
+    dynamic_thresh: float | None,
+    trial_id: str,
+    output_dir: Path,
+    figure_notes: list[str] | None = None,
+) -> None:
+    if not stim_blocks or not block_rows or len(time_axis) == 0:
+        return
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    global_y_min = float(np.nanmin(brightness_trace)) if len(brightness_trace) else 0.0
+    global_y_max = float(np.nanmax(brightness_trace)) if len(brightness_trace) else 1.0
+    y_pad = max((global_y_max - global_y_min) * 0.08, 1.0)
+
+    block_by_index = {int(row.get("block_index", idx + 1)): row for idx, row in enumerate(block_rows)}
+    note_lines = [str(line) for line in (figure_notes or []) if str(line).strip()]
+    for panel_index, block in enumerate(stim_blocks):
+        block_index = int(block.get("stim_index", panel_index + 1))
+        start = _as_float_or_none(block.get("start_time_sec"))
+        end = _as_float_or_none(block.get("end_time_sec"))
+        if start is None or end is None:
+            continue
+        duration = max(0.1, end - start)
+        pad = max(1.0, duration * 1.5)
+        left = max(0.0, start - pad)
+        right = min(float(time_axis[-1]), end + pad)
+        mask = (time_axis >= left) & (time_axis <= right)
+        local_time = time_axis[mask]
+        local_trace = brightness_trace[mask]
+        if len(local_time) == 0:
+            continue
+        fig, ax = plt.subplots(1, 1, figsize=(6.4, 3.8))
+        ax.plot(local_time, local_trace, color="#2563eb", linewidth=0.9, alpha=0.85)
+        if dynamic_thresh is not None:
+            ax.axhline(dynamic_thresh, color="#dc2626", linestyle="--", linewidth=0.8)
+        judged = block_by_index.get(block_index, {})
+        flag = int(judged.get("final_is_stim_event", 0) or 0)
+        color = "#16a34a" if flag == 1 else "#dc2626"
+        ax.axvspan(start, end, color=color, alpha=0.22)
+        ax.text(
+            0.02,
+            0.96,
+            f"#{block_index}  {flag}",
+            transform=ax.transAxes,
+            ha="left",
+            va="top",
+            fontsize=9,
+            fontweight="bold",
+            color=color,
+            bbox={
+                "boxstyle": "round,pad=0.18",
+                "facecolor": "white",
+                "edgecolor": color,
+                "alpha": 0.88,
+                "linewidth": 0.7,
+            },
+        )
+        if judged.get("matched_final_stim_index", "") != "":
+            ax.text(
+                0.98,
+                0.96,
+                f"final #{judged.get('matched_final_stim_index')}",
+                transform=ax.transAxes,
+                ha="right",
+                va="top",
+                fontsize=8,
+                color="#374151",
+            )
+        ax.set_xlim(left, right)
+        ax.set_ylim(global_y_min - y_pad, global_y_max + y_pad)
+        ax.set_xlabel("sec", fontsize=9)
+        ax.set_ylabel("a.u.", fontsize=9)
+        ax.set_title(
+            f"Stimulus block #{block_index} ({flag}) - {trial_id}",
+            fontsize=11,
+            fontweight="bold",
+        )
+        ax.grid(True, alpha=0.22)
+        if note_lines:
+            fig.text(0.01, 0.01, "\n".join(note_lines), ha="left", va="bottom", fontsize=8)
+        panel_path = output_dir / f"{trial_id}_stim_block_{block_index:03d}.png"
+        try:
+            fig.tight_layout(rect=(0.0, 0.05, 1.0, 0.96))
+            save_figure_with_pdf(fig, panel_path, dpi=150)
+        finally:
+            plt.close(fig)
+
+
 def save_trial_outputs(
     out_dir: Path,
     trial_id: str,
@@ -1291,7 +1490,9 @@ def save_trial_outputs(
     summary_row: dict,
     events_rows: list[dict],
     pulse_events_rows: list[dict],
-    stim_blocks: list[dict],
+    display_stim_blocks: list[dict],
+    diagnostic_stim_blocks: list[dict],
+    block_rows: list[dict],
     dynamic_thresh: float | None,
     analog_trace: AnalogTrace,
     figure_notes: list[str],
@@ -1321,6 +1522,9 @@ def save_trial_outputs(
         "pol_angle_list",
         "stim_protocol_id",
         "stim_protocol_file",
+        "stim_protocol_dir",
+        "trial_start_estimate",
+        "protocol_trial_start_estimate",
         "protocol_match_delta_sec",
         "analog_source",
         "raw_z_index",
@@ -1373,11 +1577,12 @@ def save_trial_outputs(
         paths["stim_pulse_events"],
         index=False,
     )
+    pd.DataFrame(block_rows).to_csv(paths["stim_block_diagnostics"], index=False)
 
     plot_stim_trace(
         brightness_trace=brightness_trace,
         time_axis=time_axis,
-        stim_blocks=stim_blocks,
+        stim_blocks=display_stim_blocks,
         dynamic_thresh=dynamic_thresh,
         trial_id=trial_id,
         output_path=paths["stim_trace"],
@@ -1385,11 +1590,11 @@ def save_trial_outputs(
         figure_notes=figure_notes,
     )
 
-    if events_rows or pulse_events_rows or stim_blocks:
+    if events_rows or pulse_events_rows or display_stim_blocks:
         plot_stim_schematic(
             events_rows=events_rows,
             pulse_events_rows=pulse_events_rows,
-            stim_blocks=stim_blocks,
+            stim_blocks=display_stim_blocks,
             trial_id=trial_id,
             output_path=paths["stim_schematic"],
             figure_notes=figure_notes,
@@ -1398,11 +1603,22 @@ def save_trial_outputs(
             plot_stim_schematic(
                 events_rows=events_rows,
                 pulse_events_rows=pulse_events_rows,
-                stim_blocks=stim_blocks,
+                stim_blocks=display_stim_blocks,
                 trial_id=trial_id,
                 output_path=paths["stim_pulse_trace"],
                 figure_notes=figure_notes,
             )
+    if diagnostic_stim_blocks:
+        plot_stim_event_slice_panels(
+            brightness_trace=brightness_trace,
+            time_axis=time_axis,
+            stim_blocks=diagnostic_stim_blocks,
+            block_rows=block_rows,
+            dynamic_thresh=dynamic_thresh,
+            trial_id=trial_id,
+            output_dir=paths["stim_event_slices_dir"],
+            figure_notes=figure_notes,
+        )
 
 
 def is_nostim(b_max: float, b_min: float, rel_thresh: float) -> bool:
@@ -1425,7 +1641,7 @@ def process_trial(
         return None, [], [], "skipped"
 
     if dry_run:
-        LOGGER.info("[dry-run] Would process %s -> %s", trial.input_dir, out_dir)
+        LOGGER.info("[dry-run] 将处理 %s -> %s", trial.input_dir, out_dir)
         return None, [], [], "processed"
 
     if action == "overwrite":
@@ -1437,7 +1653,7 @@ def process_trial(
     n_z = int(meta.get("dimensions", {}).get("z_slices", 1) or 1)
     timepoints = int(meta.get("dimensions", {}).get("timepoints", 0) or 0)
     if dt <= 0:
-        LOGGER.warning("frame_interval_sec=%s for %s; using 1.0 seconds.", dt, trial.trial_id)
+        LOGGER.warning("%s 的 frame_interval_sec=%s；将使用 1.0 秒。", trial.trial_id, dt)
         dt = 1.0
 
     analog_trace = read_analog_trace(trial, analog_source, raw_z_strategy)
@@ -1471,7 +1687,7 @@ def process_trial(
             protocol_match_delta_sec if protocol_match_delta_sec is not None else float("nan"),
         )
     else:
-        LOGGER.info("%s has no matching stimulus protocol by absolute timestamp; marking as nostim.", trial.trial_id)
+        LOGGER.info("%s 未按绝对时间匹配到刺激协议；标记为 nostim。", trial.trial_id)
 
     packet_stim_blocks = packet_blocks_from_pulse_blocks(stim_blocks, protocol)
     events_rows = build_events_rows(
@@ -1490,6 +1706,7 @@ def process_trial(
         analog_trace,
     )
     pulse_events_rows = build_pulse_events_rows(trial.trial_id, stim_blocks, protocol, trial_start_estimate)
+    block_rows = block_judgement_rows(stim_blocks, events_rows)
     figure_notes = build_figure_notes(protocol, protocol_match_delta_sec, analog_trace)
     display_stim_blocks = [
         {
@@ -1509,7 +1726,9 @@ def process_trial(
         summary_row=summary_row,
         events_rows=events_rows,
         pulse_events_rows=pulse_events_rows,
-        stim_blocks=display_stim_blocks,
+        display_stim_blocks=display_stim_blocks,
+        diagnostic_stim_blocks=stim_blocks,
+        block_rows=block_rows,
         dynamic_thresh=dynamic_thresh,
         analog_trace=analog_trace,
         figure_notes=figure_notes,
@@ -1522,10 +1741,14 @@ def save_combined_outputs(
     summaries: list[dict],
     events: list[dict],
     pulse_events: list[dict],
+    block_rows_by_trial: dict[str, list[dict]],
     dry_run: bool,
 ) -> None:
     if dry_run:
-        LOGGER.info("[dry-run] Would write combined stim_map.csv, stim_events.csv, and stim_pulse_events.csv in %s", step_root)
+        LOGGER.info(
+            "[dry-run] 将在 %s 中写入合并后的 stim_map.csv、stim_events.csv、stim_pulse_events.csv 和 stim_block_summary.csv",
+            step_root,
+        )
         return
 
     step_root.mkdir(parents=True, exist_ok=True)
@@ -1540,6 +1763,9 @@ def save_combined_outputs(
         "pol_angle_list",
         "stim_protocol_id",
         "stim_protocol_file",
+        "stim_protocol_dir",
+        "trial_start_estimate",
+        "protocol_trial_start_estimate",
         "protocol_match_delta_sec",
         "analog_source",
         "raw_z_index",
@@ -1565,6 +1791,25 @@ def save_combined_outputs(
         "analog_minus_protocol_onset_sec",
     ]
     pd.DataFrame(summaries).reindex(columns=summary_columns).to_csv(step_root / "stim_map.csv", index=False)
+    match_columns = [
+        "trialID",
+        "trial_start_estimate",
+        "stim_protocol_id",
+        "stim_protocol_file",
+        "stim_protocol_dir",
+        "protocol_trial_start_estimate",
+        "protocol_match_delta_sec",
+        "stim_type",
+        "number_of_stim",
+        "pol_angle_list",
+        "analog_source",
+        "raw_z_index",
+        "raw_z_strategy",
+    ]
+    pd.DataFrame(summaries).reindex(columns=match_columns).to_csv(
+        step_root / "stim_protocol_matches.csv",
+        index=False,
+    )
     pd.DataFrame(events).reindex(columns=event_columns).to_csv(step_root / "stim_events.csv", index=False)
 
     pulse_event_columns = [
@@ -1591,6 +1836,20 @@ def save_combined_outputs(
         step_root / "stim_pulse_events.csv",
         index=False,
     )
+    block_summary_columns = [
+        "date",
+        "trialID",
+        "n_blocks_total",
+        "n_final_is_1",
+        "n_final_is_0",
+        "stim_type",
+        "number_of_stim",
+        "stim_protocol_id",
+        "protocol_match_delta_sec",
+    ]
+    pd.DataFrame(build_block_summary_rows(summaries, block_rows_by_trial)).reindex(
+        columns=block_summary_columns
+    ).to_csv(step_root / "stim_block_summary.csv", index=False)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1622,10 +1881,38 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--stim-log-root",
         type=Path,
-        help="Folder containing timestamp_log_*.csv, stim_map_*.csv, and experiment_config_*.json files.",
+        help=(
+            "Folder containing raw stimulus logs. Nested folders are supported; "
+            "timestamp_log_*.csv is matched to stim_map_*.csv and experiment_config_*.json in the same folder."
+        ),
     )
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("--trial-id", help="Only process one trial ID, or a comma-separated list of trial IDs.")
     return parser
+
+
+def read_first_row_dict(path: Path) -> dict:
+    if not path.exists() or path.stat().st_size == 0:
+        return {}
+    try:
+        df = pd.read_csv(path)
+    except pd.errors.EmptyDataError:
+        return {}
+    if df.empty:
+        return {}
+    return df.iloc[0].to_dict()
+
+
+def read_rows_dicts(path: Path) -> list[dict]:
+    if not path.exists() or path.stat().st_size == 0:
+        return []
+    try:
+        df = pd.read_csv(path)
+    except pd.errors.EmptyDataError:
+        return []
+    if df.empty:
+        return []
+    return df.to_dict("records")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1640,27 +1927,31 @@ def main(argv: list[str] | None = None) -> int:
 
     if not input_root.exists():
         if args.dry_run:
-            LOGGER.warning("Input root does not exist yet: %s", input_root)
-            LOGGER.info("Dry-run complete. Step 01 must run before step 02 can process data.")
+            LOGGER.warning("输入根目录尚不存在：%s", input_root)
+            LOGGER.info("dry-run 完成。step 02 处理数据前必须先运行 step 01。")
             return 0
-        LOGGER.error("Input root does not exist: %s", input_root)
+        LOGGER.error("输入根目录不存在：%s", input_root)
         return 1
 
     trials = discover_trials(input_root, data_root)
+    if args.trial_id:
+        wanted = {item.strip() for item in args.trial_id.split(",") if item.strip()}
+        trials = [trial for trial in trials if trial.trial_id in wanted]
     summary = RunSummary(found=len(trials))
-    LOGGER.info("Input root : %s", input_root)
-    LOGGER.info("Output root: %s", out_root)
-    LOGGER.info("Analog source: %s", args.analog_source)
-    LOGGER.info("Raw z strategy: %s", args.raw_z_strategy)
-    LOGGER.info("Found %d trial(s) with Stim_Analog outputs.", len(trials))
+    LOGGER.info("输入根目录：%s", input_root)
+    LOGGER.info("输出根目录：%s", out_root)
+    LOGGER.info("模拟信号来源：%s", args.analog_source)
+    LOGGER.info("原始 z 轴策略：%s", args.raw_z_strategy)
+    LOGGER.info("找到 %d 个含 Stim_Analog 输出的 trial。", len(trials))
     stim_log_root = args.stim_log_root.expanduser().resolve() if args.stim_log_root else default_stim_log_root(data_root)
     if stim_log_root is not None:
-        LOGGER.info("Stim log root: %s", stim_log_root)
+        LOGGER.info("刺激日志根目录：%s", stim_log_root)
     protocols = discover_stim_protocols(stim_log_root)
 
     all_summaries: list[dict] = []
     all_events: list[dict] = []
     all_pulse_events: list[dict] = []
+    all_block_rows_by_trial: dict[str, list[dict]] = {}
 
     for trial in trials:
         out_dir = trial_output_dir(out_root, trial)
@@ -1682,24 +1973,38 @@ def main(argv: list[str] | None = None) -> int:
 
         if status == "skipped":
             summary.skipped += 1
-            LOGGER.info("[skip] %s", trial.trial_id)
+            LOGGER.info("[跳过] %s", trial.trial_id)
         else:
             summary.processed += 1
-            LOGGER.info("[ok] %s", trial.trial_id)
+            LOGGER.info("[完成] %s", trial.trial_id)
 
         if summary_row is not None:
             all_summaries.append(summary_row)
+        else:
+            stim_map_path = output_paths(out_dir, trial.trial_id)["stim_map"]
+            existing_summary_row = read_first_row_dict(stim_map_path)
+            if existing_summary_row:
+                all_summaries.append(existing_summary_row)
         all_events.extend(events_rows)
         all_pulse_events.extend(pulse_events_rows)
+        block_path = output_paths(out_dir, trial.trial_id)["stim_block_diagnostics"]
+        all_block_rows_by_trial[trial.trial_id] = read_rows_dicts(block_path)
 
-    if all_summaries or args.dry_run:
-        save_combined_outputs(out_root, all_summaries, all_events, all_pulse_events, dry_run=args.dry_run)
+    if all_summaries or all_block_rows_by_trial or args.dry_run:
+        save_combined_outputs(
+            out_root,
+            all_summaries,
+            all_events,
+            all_pulse_events,
+            all_block_rows_by_trial,
+            dry_run=args.dry_run,
+        )
 
-    LOGGER.info("Summary:")
-    LOGGER.info("  found: %d", summary.found)
-    LOGGER.info("  processed or would process: %d", summary.processed)
-    LOGGER.info("  skipped: %d", summary.skipped)
-    LOGGER.info("  failed: %d", summary.failed)
+    LOGGER.info("汇总：")
+    LOGGER.info("  找到：%d", summary.found)
+    LOGGER.info("  已处理或将处理：%d", summary.processed)
+    LOGGER.info("  跳过：%d", summary.skipped)
+    LOGGER.info("  失败：%d", summary.failed)
     return 1 if summary.failed else 0
 
 

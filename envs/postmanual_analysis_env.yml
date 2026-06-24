@@ -1,0 +1,16 @@
+name: postmanual_analysis
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - numpy
+  - pandas
+  - scipy
+  - matplotlib
+  - tifffile
+  - scikit-learn
+  - networkx
+  - umap-learn
+  - python-igraph
+  - leidenalg
+  - jinja2

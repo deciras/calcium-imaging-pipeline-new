@@ -92,13 +92,15 @@ python3 current/run_pipeline.py \
   07_events/
   08_stim_response/
   09_angle_tuning/
-  10_population_features/
-  11_population_similarity/
-  12_hierarchical_clustering/
-  13_leiden/
-  14_dimensionality_reduction/
-  15_cross_trial_summary/
-  16_reports/
+  10_trace_plots/
+  11_population_features/
+  12_stimulus_slice_features/
+  13_population_similarity/
+  14_hierarchical_clustering/
+  15_leiden/
+  16_dimensionality_reduction/
+  17_cross_trial_summary/
+  18_reports/
 ```
 
 每一步的结果都放在自己的文件夹里。这样比较容易检查，也不容易把原始数据和中间结果混在一起。
@@ -122,7 +124,7 @@ python3 current/run_pipeline.py \
 ```text
 premanual：00 -> 01 -> 02 -> 03 -> 04 -> 05
 manual：人工 ROI 校对
-postmanual：06 -> 07 -> 08 -> 09 -> 10 -> 11 -> 12 -> 13 -> 14 -> 15 -> 16
+postmanual：06 -> 07 -> 08 -> 09 -> 10 -> 11 -> 12 -> 13 -> 14 -> 15 -> 16 -> 17 -> 18
 ```
 
 一口气跑自动前半段：
@@ -161,13 +163,13 @@ python3 current/run_pipeline.py \
 
 ## 一口气跑后半段
 
-如果前面的 TIFF、运动校正、suite2p 都已经做好，可以从 06 跑到 16：
+如果前面的 TIFF、运动校正、suite2p 和 manual ROI 都已经做好，可以从 06 跑到 18：
 
 ```bash
 cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipeline-new
 
 python3 current/run_pipeline.py \
-  --steps 06,07,08,09,10,11,12,13,14,15,16 \
+  --steps 06,07,08,09,10,11,12,13,14,15,16,17,18 \
   --data-root /Volumes/Yifei_Ding/20260617_test \
   --action skip \
   --roi-source auto \
@@ -176,7 +178,9 @@ python3 current/run_pipeline.py \
   --baseline-sec 5 \
   --response-sec 10 \
   --angle-period 180 \
-  --similarity-source features \
+  --similarity-source slices \
+  --cluster-source slices \
+  --embedding-source slices \
   --min-corr 0.3 \
   --knn 10 \
   --n-clusters 6 \
@@ -184,6 +188,16 @@ python3 current/run_pipeline.py \
 ```
 
 这个命令不会重做已有结果，因为用了 `--action skip`。
+
+默认的 population/cluster 主线现在是 stimulus-slice based：
+
+- 08 先按刺激 onset 对齐，输出 peri-stimulus tensor。onset/offset 时间优先使用 analog-derived columns，其次才回退到 protocol/MCU 时间。
+- 12 把每个 ROI x stimulus slice 用刺激前 baseline 做 robust normalization：baseline median 作为中心，baseline MAD/std 作为尺度，最小尺度默认 0.02 dF/F。
+- 12 对每个 slice 输出 `stimulus_evoked_flag` 和 `stimulus_response_score`。默认 flag 需要同时满足 amplitude、latency、recovery 三类证据：
+  - `amplitude_pass`：normalized peak z >= 3，或者 mean z >= 1.5 且 positive AUC >= 1.0。
+  - `latency_pass`：刺激 onset 后 sustained crossing 在 3 s 内出现。
+  - `recovery_pass`：刺激 offset 后 6 s 内回到 abs(z) <= 1，或 offset 窗口平均 abs(z) <= 1。没有可用 offset 窗口时不把 recovery 当作硬失败。
+- 13 similarity、14 hierarchical clustering、16 PCA/UMAP 默认使用 12 的 normalized stimulus-slice feature matrix。`--cluster-source traces` 可以切回完整 trace clustering，主要作为漂白/自发活动/组织状态 QC。
 
 ## 每一步在干什么
 
@@ -375,7 +389,7 @@ UMAP 是可选项，没装也不影响 PCA。
 最重要的是：
 
 ```text
-DATA_ROOT/16_reports/global_report.html
+DATA_ROOT/18_reports/global_report.html
 ```
 
 里面会有：
@@ -396,13 +410,13 @@ cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipel
 python3 current/run_pipeline.py --list-steps
 ```
 
-### 只跑 15 和 16，更新总表和报告
+### 只跑 17 和 18，更新总表和报告
 
 ```bash
 cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipeline-new
 
 python3 current/run_pipeline.py \
-  --steps 15,16 \
+  --steps 17,18 \
   --data-root /Volumes/Yifei_Ding/20260617_test \
   --action overwrite
 ```
@@ -413,7 +427,7 @@ python3 current/run_pipeline.py \
 cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipeline-new
 
 python3 current/run_pipeline.py \
-  --steps 16 \
+  --steps 18 \
   --data-root /Volumes/Yifei_Ding/20260617_test \
   --action overwrite
 ```
@@ -472,7 +486,9 @@ python3 current/run_pipeline.py \
   --baseline-sec 5 \
   --response-sec 10 \
   --angle-period 180 \
-  --similarity-source features \
+  --similarity-source slices \
+  --cluster-source slices \
+  --embedding-source slices \
   --min-corr 0.3 \
   --knn 10 \
   --n-clusters 6 \
@@ -484,7 +500,8 @@ python3 current/run_pipeline.py \
 目前主要用三个环境：
 
 - `fiji_env`：运行 Fiji launcher
-- `caiman`：运行 CaImAn、图像处理、分析和画图
+- `caiman`：运行 CaImAn motion correction 和前段图像处理
+- `postmanual_analysis`：运行 06-18 后半段分析、聚类和画图
 - `suite2p`：运行 suite2p ROI detection
 
 环境配置文件在：
@@ -564,3 +581,256 @@ Mac 和 Linux workstation 立即同步化。
 - 不确定时先用 `--step-dry-run`
 - 只有明确要重做某一步时才用 `--action overwrite`
 - 真实数据跑完后，先看每一步 summary，再相信后面的分析
+
+## 后半段各步详细说明（中文）
+
+下面这一段是现在推荐主线里，`06 -> 18` 每一步更具体的用途、原理和默认判定思路。
+
+### 06 提取 dF/F
+
+这一步做两件事：
+
+1. 决定这次 trial 最终使用哪些 ROI  
+2. 用这些 ROI 从 motion-corrected movie 重新提取 `F_raw`、`Fneu`、`F_corrected` 和 `dF/F`
+
+默认 ROI 选择逻辑：
+
+- 优先 final manual ROI
+- 如果没有 final manual ROI，则回退到 suite2p `iscell.npy`
+
+默认 trace 逻辑：
+
+- ROI 位置/形状来自 manual 或 suite2p
+- 但荧光时间序列默认从 `03_motion_correct` 的 corrected movie 重新抽取，而不是直接盲信 suite2p 的原始 `F.npy`
+
+默认 neuropil 校正：
+
+- `F_corrected = F_raw - 0.7 * Fneu`
+
+默认 F0 / dF/F：
+
+- 按 `--f0-mode` 计算 baseline
+- 最终用 `(F_corrected - F0) / max(F0, eps)` 生成 dF/F
+
+关于 stimulus sidecar：
+
+- 06 现在会优先使用 `02_stim_map/` 的最新 `stim_events / stim_map / stim_pulse_events`
+- 只有 `02` 缺失时才回退到本 trial 输入目录里的旧副本
+- 这样可以避免 “02 重跑以后，06/08 还继续读旧刺激信息” 的问题
+
+### 07 检测 calcium events
+
+这一步不是做 stimulus slicing，而是做全 trace 的 event detection。
+
+默认思路是先在每条 ROI dF/F 上找比较稳健的瞬时活动，再输出：
+
+- `event_table.csv`
+- `event_binary.npy`
+- `event_mask.npy`
+- `event_rate_by_roi.csv`
+- `event_summary.csv/json`
+
+现在 AUC 计算已经统一成兼容新旧 NumPy 的写法，不再依赖旧 `np.trapz` API。
+
+### 08 按刺激切 ROI trace
+
+这一步才是真正开始做 “ROI x stimulus slice”。
+
+逻辑顺序应该是：
+
+1. 先拿刺激时间  
+2. 按刺激时间把每个 ROI 的 dF/F 切成 peri-stimulus slices  
+3. 再在这些切片上算 response table
+
+默认切片窗口：
+
+- 刺激前 baseline：`10 s`
+- 刺激后 response window：`6 s`
+- 刺激结束后 offset/recovery window：`6 s`
+
+关键原则：
+
+- **只要有可用 stimulus timing，就应该先切片**
+- **有没有明显钙活动，是切完以后再判，不应该先把切片筛掉**
+
+刺激时间来源现在的优先级：
+
+1. `02_stim_map/` 最新 sidecar  
+2. 旧目录副本（仅当前者缺失时）
+
+这次修复的核心就是把 step 08 从“可能读旧 sidecar”改成了“优先读 step 02 最新 stimulus timing”。
+
+### 09 角度调谐
+
+这一步基于 step 08 的 stimulus-locked response 统计每个 ROI 的 AoLP tuning。
+
+需要注意：
+
+- 偏振角是 `0-180 deg` 周期，不是 `0-360 deg`
+- 所以 preferred angle / angle difference 的统计必须按 axial data 处理
+
+当前默认更偏保守：
+
+- 不是只要有一点差别就叫 tuning
+- 要求 response 和角度选择性都达到一定稳定度
+
+### 10 ROI trace plots
+
+这一步主要是画单 ROI 或多 ROI trace 供人工检查。
+
+用途更偏 QC：
+
+- 看漂白
+- 看自发波动
+- 看 stimulus 时段附近的原始动态
+- 看某个 ROI 的峰值是不是合理
+
+### 11 population features
+
+这一步把 ROI 的整条 trace 或基础统计量先整理成 population-level feature。
+
+它更像是一个“全局背景行为”入口，适合看：
+
+- baseline activity
+- 波动强弱
+- 漂移
+- 自发同步
+
+### 12 stimulus-slice features
+
+这一步是当前功能聚类主线的核心。
+
+它把 step 08 的 peri-stimulus tensor 变成：
+
+- `ROI x stimulus slice` 的 response table
+- `ROI x stimulus slice` 的 feature matrix
+- slice-level `0/1` 判定
+
+默认 normalized 规则：
+
+- 每个 `ROI x stimulus slice` 用它自己的 pre-stimulus baseline 做 normalization
+- baseline median 作为中心
+- baseline MAD/std 作为尺度
+- 最小尺度默认 `0.02 dF/F`
+
+默认 `stimulus_evoked_flag` 规则：
+
+必须同时满足三组证据：
+
+1. `amplitude_pass`
+   - peak z >= 3
+   - 或 mean z >= 1.5 且 positive AUC >= 1.0
+2. `latency_pass`
+   - onset 后 3 s 内出现 sustained crossing
+3. `recovery_pass`
+   - offset 后 6 s 内回到 `abs(z) <= 1`
+   - 或 offset window 的平均 `abs(z) <= 1`
+
+也就是说：
+
+- 先切片
+- 再判 `0/1`
+
+而不是反过来。
+
+这一步现在还会给每个 `ROI x stimulus slice` 生成单独 panel：
+
+- 上面：normalized trace
+- 下面：raw dF/F
+- 图上直接写 `evoked=0/1`
+- 以及 `amp / lat / rec` 三个子判定和数值证据
+
+### 13 population similarity
+
+默认使用 step 12 的 stimulus-slice feature matrix 来算 ROI 之间的相似性。
+
+这一步现在更像：
+
+- 功能相似性的基础图
+- 为后面的 hierarchical clustering / Leiden / embedding 提供输入
+
+如果想看完整 trace 的相似性，而不是 stimulus-slice 功能相似性，可以显式切回 trace source，但那更偏 QC。
+
+### 14 hierarchical clustering
+
+这一步做层次聚类。
+
+当前主线推荐：
+
+- 用 normalized stimulus-slice features 聚类
+
+而不是直接用整条 trace 聚类，因为整条 trace 更容易被：
+
+- 漂白
+- baseline drift
+- spontaneous activity
+- recording state
+
+这些东西主导。
+
+### 15 Leiden community detection
+
+这一步是图聚类版本的功能分群。
+
+它依赖 step 13 的相似性图。如果某个 trial：
+
+- 没有足够有效边
+- feature matrix 太空
+
+现在会更倾向于 clean skip，而不是整步失败。
+
+### 16 dimensionality reduction
+
+这一步做 PCA / UMAP 之类的降维。
+
+用途主要是：
+
+- 看 cluster 是否分开
+- 看不同 response pattern 的连续性
+- 看 trial 内功能结构是否有明显主轴
+
+默认也优先用 stimulus-slice features。
+
+### 17 cross-trial summary
+
+这一步把很多单 trial summary 汇总到跨 trial 级别。
+
+适合回答的问题包括：
+
+- 每个 trial 有多少 ROI
+- 有多少响应细胞
+- 哪些 trial 没 stimulus
+- 哪些 trial clustering / embedding 被跳过
+
+### 18 HTML report
+
+最后把前面多步结果汇总成一个 HTML 报告。
+
+这个报告不是只放文件链接，而是尽量让人能直接检查：
+
+- trial context
+- clustering / similarity
+- 响应统计
+- QC 异常
+
+## 这次与 stimulus slicing 直接相关的修复
+
+这次已经确认并修复了两条关键问题：
+
+1. `08_stim_response_analysis.py`
+   - 现在优先读 `02_stim_map/` 的最新 stimulus sidecar
+   - 不再默认继续吃 `06_dff/` 里可能过期的副本
+
+2. `06_extract_dff.py`
+   - 现在也优先同步 `02_stim_map/` 的最新 sidecar
+   - 保证 06 目录里的刺激信息不容易滞后
+
+如果以后再看到：
+
+- `n_stimulus_slices = 0`
+- 但你明明知道这个 trial 有刺激
+
+第一件要检查的事情应该就是：
+
+- `02_stim_map/<trial>/*_stim_events.csv` 是否有 event rows
+- `08_stim_response/<trial>/*_stim_response_summary.json` 里的 `n_stim_events` 是否仍然是 0

@@ -84,7 +84,7 @@ Trace 来源：
 
 保存后，`suite2p_compatible/plane0/` 里的 ROI 会作为一个统一的 final ROI set 输出。GUI 会按空间位置给 final ROI 重新排序：先按 `y_mean`，再按 `x_mean`，最后按 ROI 面积。06 之后的 `roi_id=1..N` 来自这个统一顺序，不再表示 suite2p 原始编号或 manual 绘制顺序。
 
-后续 06-16 对所有 final ROI 使用同一套计算规则：同一个 trace movie、同一种 neuropil mask、同一种 dF/F 和 feature 计算。`roi_source`、`roi_type`、`manual_roi_id`、`suite2p_original_id`、`previous_suite2p_original_id` 只作为查询和追溯字段保留，不参与 ROI 选择、trace 提取、dF/F、响应分析或聚类。
+后续 06-18 对所有 final ROI 使用同一套计算规则：同一个 trace movie、同一种 neuropil mask、同一种 dF/F、stimulus-slice feature 和 population feature 计算。`roi_source`、`roi_type`、`manual_roi_id`、`suite2p_original_id`、`previous_suite2p_original_id` 只作为查询和追溯字段保留，不参与 ROI 选择、trace 提取、dF/F、响应分析或聚类。
 
 常用快捷键：
 

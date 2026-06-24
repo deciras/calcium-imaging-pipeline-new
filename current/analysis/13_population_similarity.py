@@ -14,13 +14,16 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from trial_context_utils import load_excluded_trial_ids
+
 
 LOGGER = logging.getLogger("population_similarity")
-STEP_NAME = "11_population_similarity"
+STEP_NAME = "13_population_similarity"
 STEP_OUTPUT_PATTERNS = (
     "*_trace_correlation_matrix.npy",
     "*_response_correlation_matrix.npy",
     "*_feature_similarity_matrix.npy",
+    "*_slice_similarity_matrix.npy",
     "*_distance_matrix.npy",
     "*_similarity_edges.csv",
     "*_similarity_heatmap.png",
@@ -34,10 +37,12 @@ class TrialInput:
     trial_id: str
     rel_parent: Path
     input_dir: Path
+    slice_dir: Path
     feature_matrix_path: Path
     z_feature_matrix_path: Path
     trace_matrix_path: Path | None
     response_matrix_path: Path | None
+    slice_matrix_path: Path | None
 
 
 @dataclass
@@ -61,7 +66,11 @@ def default_output_root(data_root: Path) -> Path:
 
 
 def default_input_root(output_root: Path) -> Path:
-    return output_root / "10_population_features"
+    return output_root / "11_population_features"
+
+
+def default_slice_root(output_root: Path) -> Path:
+    return output_root / "12_stimulus_slice_features"
 
 
 def step_output_root(output_root: Path) -> Path:
@@ -80,21 +89,24 @@ def find_first_existing(folder: Path, patterns: tuple[str, ...]) -> Path | None:
     return None
 
 
-def discover_trials(input_root: Path) -> list[TrialInput]:
+def discover_trials(input_root: Path, slice_root: Path) -> list[TrialInput]:
     trials = []
     for feature_path in sorted(input_root.rglob("*_roi_feature_matrix.csv")):
         input_dir = feature_path.parent
         trial_id = input_dir.name
         rel_parent = input_dir.parent.relative_to(input_root)
+        slice_dir = slice_root / rel_parent / trial_id
         trials.append(
             TrialInput(
                 trial_id=trial_id,
                 rel_parent=rel_parent,
                 input_dir=input_dir,
+                slice_dir=slice_dir,
                 feature_matrix_path=feature_path,
                 z_feature_matrix_path=input_dir / f"{trial_id}_roi_feature_matrix_zscored.csv",
                 trace_matrix_path=find_first_existing(input_dir, ("*_trace_matrix.npy",)),
                 response_matrix_path=find_first_existing(input_dir, ("*_response_matrix.npy",)),
+                slice_matrix_path=find_first_existing(slice_dir, ("*_stim_slice_feature_matrix_zscored.npy", "*_stim_slice_feature_matrix.npy")),
             )
         )
     return trials
@@ -168,8 +180,9 @@ def cosine_similarity(matrix: np.ndarray) -> np.ndarray:
 
 
 def edges_from_similarity(feature_df: pd.DataFrame, similarity: np.ndarray, min_corr: float, knn: int) -> pd.DataFrame:
+    columns = ["source_roi_id", "target_roi_id", "similarity"]
     if similarity.size == 0:
-        return pd.DataFrame(columns=["source_roi_id", "target_roi_id", "similarity"])
+        return pd.DataFrame(columns=columns)
     roi_ids = feature_df["roi_id"].astype(int).to_numpy() if "roi_id" in feature_df else np.arange(similarity.shape[0]) + 1
     rows = []
     for i in range(similarity.shape[0]):
@@ -185,7 +198,7 @@ def edges_from_similarity(feature_df: pd.DataFrame, similarity: np.ndarray, min_
             kept += 1
             if knn > 0 and kept >= knn:
                 break
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows, columns=columns)
 
 
 def save_heatmap(matrix: np.ndarray, out_path: Path, trial_id: str, dpi: int) -> None:
@@ -213,9 +226,7 @@ def process_trial(trial: TrialInput, out_dir: Path, args: argparse.Namespace) ->
     z_df = pd.read_csv(trial.z_feature_matrix_path) if trial.z_feature_matrix_path.exists() else feature_df
     feature_matrix = numeric_matrix(z_df)
     feature_similarity = cosine_similarity(feature_matrix)
-    distance = (1.0 - feature_similarity).astype(np.float32)
     np.save(out_dir / f"{trial.trial_id}_feature_similarity_matrix.npy", feature_similarity)
-    np.save(out_dir / f"{trial.trial_id}_distance_matrix.npy", distance)
 
     trace_corr = np.empty((0, 0), dtype=np.float32)
     if trial.trace_matrix_path and trial.trace_matrix_path.exists():
@@ -227,12 +238,27 @@ def process_trial(trial: TrialInput, out_dir: Path, args: argparse.Namespace) ->
             response_corr = safe_corr(response)
     np.save(out_dir / f"{trial.trial_id}_trace_correlation_matrix.npy", trace_corr)
     np.save(out_dir / f"{trial.trial_id}_response_correlation_matrix.npy", response_corr)
+    slice_corr = np.empty((0, 0), dtype=np.float32)
+    n_slice_features = 0
+    if trial.slice_matrix_path and trial.slice_matrix_path.exists():
+        slice_matrix = np.load(trial.slice_matrix_path, allow_pickle=True)
+        if slice_matrix.ndim == 2 and slice_matrix.shape[1] > 0:
+            n_slice_features = int(slice_matrix.shape[1])
+            slice_corr = safe_corr(slice_matrix)
+    np.save(out_dir / f"{trial.trial_id}_slice_similarity_matrix.npy", slice_corr)
 
     source = args.similarity_source
-    selected = {"traces": trace_corr, "responses": response_corr, "features": feature_similarity}.get(source, feature_similarity)
+    selected = {
+        "slices": slice_corr,
+        "traces": trace_corr,
+        "responses": response_corr,
+        "features": feature_similarity,
+    }.get(source, slice_corr)
     if selected.size == 0:
         selected = feature_similarity
         source = "features"
+    distance = (1.0 - selected).astype(np.float32)
+    np.save(out_dir / f"{trial.trial_id}_distance_matrix.npy", distance)
     edges = edges_from_similarity(feature_df, selected, min_corr=args.min_corr, knn=args.knn)
     edges.to_csv(out_dir / f"{trial.trial_id}_similarity_edges.csv", index=False)
     save_heatmap(selected, out_dir / f"{trial.trial_id}_similarity_heatmap.png", trial.trial_id, args.dpi)
@@ -242,6 +268,7 @@ def process_trial(trial: TrialInput, out_dir: Path, args: argparse.Namespace) ->
         "status": "ok",
         "n_roi": int(len(feature_df)),
         "n_features": int(feature_matrix.shape[1]),
+        "n_slice_features": n_slice_features,
         "similarity_source": source,
         "n_edges": int(len(edges)),
         "min_corr": float(args.min_corr),
@@ -254,11 +281,12 @@ def process_trial(trial: TrialInput, out_dir: Path, args: argparse.Namespace) ->
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Compute ROI-ROI similarity matrices.")
     parser.add_argument("--data-root", type=Path, required=True)
-    parser.add_argument("--input-root", type=Path, help="Step-10 root. Default: OUTPUT_ROOT/10_population_features.")
+    parser.add_argument("--input-root", type=Path, help="Step-11 root. Default: OUTPUT_ROOT/11_population_features.")
+    parser.add_argument("--slice-root", type=Path, help="Step-12 root. Default: OUTPUT_ROOT/12_stimulus_slice_features.")
     parser.add_argument("--output-root", type=Path, help="Pipeline output root. Default: DATA_ROOT.")
     parser.add_argument("--action", choices=("skip", "overwrite"), default="skip")
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--similarity-source", choices=("traces", "responses", "features"), default="features")
+    parser.add_argument("--similarity-source", choices=("slices", "traces", "responses", "features"), default="slices")
     parser.add_argument("--min-corr", type=float, default=0.3)
     parser.add_argument("--knn", type=int, default=10)
     parser.add_argument("--dpi", type=int, default=150)
@@ -273,14 +301,19 @@ def main(argv: list[str] | None = None) -> int:
     data_root = args.data_root.expanduser().resolve()
     output_root = args.output_root.expanduser().resolve() if args.output_root else default_output_root(data_root).resolve()
     input_root = args.input_root.expanduser().resolve() if args.input_root else default_input_root(output_root).resolve()
+    slice_root = args.slice_root.expanduser().resolve() if args.slice_root else default_slice_root(output_root).resolve()
     out_root = step_output_root(output_root)
     if not input_root.exists():
         LOGGER.error("Input root does not exist: %s", input_root)
         return 1
-    trials = discover_trials(input_root)
+    trials = discover_trials(input_root, slice_root)
+    excluded_trial_ids = load_excluded_trial_ids(output_root)
+    if excluded_trial_ids:
+        trials = [trial for trial in trials if trial.trial_id not in excluded_trial_ids]
     summary = RunSummary(found=len(trials))
     rows = []
     LOGGER.info("Input root : %s", input_root)
+    LOGGER.info("Slice root : %s", slice_root)
     LOGGER.info("Output root: %s", out_root)
     LOGGER.info("Found %d trial(s).", len(trials))
     for trial in trials:

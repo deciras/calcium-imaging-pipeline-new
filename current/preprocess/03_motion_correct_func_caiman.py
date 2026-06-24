@@ -147,17 +147,17 @@ def clean_step_outputs(out_dir: Path) -> int:
             if path.is_dir():
                 shutil.rmtree(path)
                 removed += 1
-                LOGGER.info("Removed old step-03 folder: %s", path)
+                LOGGER.info("已删除旧的 step-03 文件夹：%s", path)
             elif path.is_file() or path.is_symlink():
                 path.unlink()
                 removed += 1
-                LOGGER.info("Removed old step-03 file: %s", path)
+                LOGGER.info("已删除旧的 step-03 文件：%s", path)
     return removed
 
 
 def read_fps_from_metadata(metadata_path: Path | None, default_fps: float) -> float:
     if metadata_path is None or not metadata_path.exists():
-        LOGGER.warning("Metadata not found; using default fps=%s.", default_fps)
+        LOGGER.warning("未找到 metadata；将使用默认 fps=%s。", default_fps)
         return float(default_fps)
 
     try:
@@ -165,15 +165,15 @@ def read_fps_from_metadata(metadata_path: Path | None, default_fps: float) -> fl
             data = json.load(handle)
         fps = data.get("temporal_calibration", {}).get("fps")
         if fps is None:
-            LOGGER.warning("Metadata fps is null in %s; using default fps=%s.", metadata_path, default_fps)
+            LOGGER.warning("%s 中的 metadata fps 为 null；将使用默认 fps=%s。", metadata_path, default_fps)
             return float(default_fps)
         fps = float(fps)
         if fps <= 0:
-            LOGGER.warning("Metadata fps=%s in %s; using default fps=%s.", fps, metadata_path, default_fps)
+            LOGGER.warning("%s 中的 metadata fps=%s；将使用默认 fps=%s。", metadata_path, fps, default_fps)
             return float(default_fps)
         return fps
     except Exception as exc:
-        LOGGER.warning("Could not read fps from %s: %s; using default fps=%s.", metadata_path, exc, default_fps)
+        LOGGER.warning("无法从 %s 读取 fps：%s；将使用默认 fps=%s。", metadata_path, exc, default_fps)
         return float(default_fps)
 
 
@@ -182,7 +182,7 @@ def copy_if_exists(src: Path | None, dst: Path) -> bool:
         return False
     dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, dst)
-    LOGGER.info("Copied %s -> %s", src, dst)
+    LOGGER.info("已复制 %s -> %s", src, dst)
     return True
 
 
@@ -236,13 +236,13 @@ def run_caiman_motion_correction(
     movie_paths = [str(trial.movie_path)]
     frate = read_fps_from_metadata(trial.metadata_path, default_fps=default_fps)
 
-    LOGGER.info("Setting up CaImAn cluster for %s.", trial.trial_id)
+    LOGGER.info("正在为 %s 配置 CaImAn 集群。", trial.trial_id)
     _, cluster, actual_processes = cm.cluster.setup_cluster(
         backend="multiprocessing",
         n_processes=n_processes,
         ignore_preexisting=False,
     )
-    LOGGER.info("CaImAn cluster processes: %s", actual_processes)
+    LOGGER.info("CaImAn 集群进程数：%s", actual_processes)
 
     try:
         mc_dict = {
@@ -286,13 +286,13 @@ def run_caiman_motion_correction(
         corrected = cm.load(motion_corrector.mmap_file)
         output_path = corrected_movie_path(out_dir, trial.trial_id)
         corrected.save(str(output_path), bigtiff=True)
-        LOGGER.info("Saved corrected movie: %s", output_path)
+        LOGGER.info("已保存校正后电影：%s", output_path)
     finally:
         try:
             cm.stop_server(dview=cluster)
-            LOGGER.info("CaImAn cluster stopped.")
+            LOGGER.info("CaImAn 集群已停止。")
         except Exception as exc:
-            LOGGER.warning("Failed to stop CaImAn cluster: %s", exc)
+            LOGGER.warning("停止 CaImAn 集群失败：%s", exc)
 
 
 def process_trial(
@@ -313,7 +313,7 @@ def process_trial(
         return "skipped"
 
     if dry_run:
-        LOGGER.info("[dry-run] Would motion-correct %s -> %s", trial.movie_path, out_dir)
+        LOGGER.info("[dry-run] 将执行运动校正 %s -> %s", trial.movie_path, out_dir)
         return "processed"
 
     if action == "overwrite":
@@ -366,23 +366,23 @@ def main(argv: list[str] | None = None) -> int:
 
     if not input_root.exists():
         if args.dry_run:
-            LOGGER.warning("Input root does not exist yet: %s", input_root)
+            LOGGER.warning("输入根目录尚不存在：%s", input_root)
             return 0
-        LOGGER.error("Input root does not exist: %s", input_root)
+        LOGGER.error("输入根目录不存在：%s", input_root)
         return 1
 
     if not stim_root.exists():
-        LOGGER.warning("Stim root does not exist; sidecar stim files will not be copied: %s", stim_root)
+        LOGGER.warning("刺激根目录不存在；不会复制附带的刺激文件：%s", stim_root)
         stim_root_or_none: Path | None = None
     else:
         stim_root_or_none = stim_root
 
     trials = discover_trials(input_root)
     summary = RunSummary(found=len(trials))
-    LOGGER.info("Input root : %s", input_root)
-    LOGGER.info("Stim root  : %s", stim_root_or_none or "(missing)")
-    LOGGER.info("Output root: %s", out_root)
-    LOGGER.info("Found %d trial(s) with Max_Proj TIFFs.", len(trials))
+    LOGGER.info("输入根目录：%s", input_root)
+    LOGGER.info("刺激根目录：%s", stim_root_or_none or "（缺失）")
+    LOGGER.info("输出根目录：%s", out_root)
+    LOGGER.info("找到 %d 个含 Max_Proj TIFF 的 trial。", len(trials))
 
     for trial in trials:
         out_dir = trial_output_dir(out_root, trial)
@@ -408,16 +408,16 @@ def main(argv: list[str] | None = None) -> int:
 
         if status == "skipped":
             summary.skipped += 1
-            LOGGER.info("[skip] %s", trial.trial_id)
+            LOGGER.info("[跳过] %s", trial.trial_id)
         else:
             summary.processed += 1
-            LOGGER.info("[ok] %s", trial.trial_id)
+            LOGGER.info("[完成] %s", trial.trial_id)
 
-    LOGGER.info("Summary:")
-    LOGGER.info("  found: %d", summary.found)
-    LOGGER.info("  processed or would process: %d", summary.processed)
-    LOGGER.info("  skipped: %d", summary.skipped)
-    LOGGER.info("  failed: %d", summary.failed)
+    LOGGER.info("汇总：")
+    LOGGER.info("  找到：%d", summary.found)
+    LOGGER.info("  已处理或将处理：%d", summary.processed)
+    LOGGER.info("  跳过：%d", summary.skipped)
+    LOGGER.info("  失败：%d", summary.failed)
     return 1 if summary.failed else 0
 
 

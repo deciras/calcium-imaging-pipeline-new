@@ -41,13 +41,15 @@ POSTMANUAL_DIRS = (
     "07_events",
     "08_stim_response",
     "09_angle_tuning",
-    "10_population_features",
-    "11_population_similarity",
-    "12_hierarchical_clustering",
-    "13_leiden",
-    "14_dimensionality_reduction",
-    "15_cross_trial_summary",
-    "16_reports",
+    "10_trace_plots",
+    "11_population_features",
+    "12_stimulus_slice_features",
+    "13_population_similarity",
+    "14_hierarchical_clustering",
+    "15_leiden",
+    "16_dimensionality_reduction",
+    "17_cross_trial_summary",
+    "18_reports",
 )
 
 LOG_DIRS = (
@@ -79,7 +81,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="premanual",
         help=(
             "premanual removes 01-05 outputs for a fresh overnight run. "
-            "all-generated also removes manual, 06-16, and pipeline log folders."
+            "all-generated also removes manual, 06-18, and pipeline log folders."
         ),
     )
     parser.add_argument(

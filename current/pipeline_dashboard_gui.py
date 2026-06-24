@@ -16,9 +16,10 @@ import signal
 import shlex
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QProcess, QProcessEnvironment, QSettings, Qt
+from PySide6.QtCore import QProcess, QProcessEnvironment, QSettings, QTimer, Qt
 from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -59,23 +60,24 @@ STEP_ROWS: tuple[tuple[str, str], ...] = (
     ("07", "detect calcium events"),
     ("08", "stimulus response analysis"),
     ("09", "angle tuning analysis"),
-    ("trace", "plot ROI traces"),
-    ("10", "population features"),
-    ("11", "population similarity"),
-    ("12", "hierarchical clustering"),
-    ("13", "Leiden community detection"),
-    ("14", "dimensionality reduction"),
-    ("15", "cross-trial summary"),
-    ("16", "report generation"),
+    ("10", "plot ROI traces"),
+    ("11", "population features"),
+    ("12", "stimulus-slice features"),
+    ("13", "population similarity"),
+    ("14", "hierarchical clustering"),
+    ("15", "Leiden community detection"),
+    ("16", "dimensionality reduction"),
+    ("17", "cross-trial summary"),
+    ("18", "report generation"),
 )
 
 STEP_GROUPS: tuple[tuple[str, str], ...] = (
-    ("premanual", "00-05 premanual"),
-    ("manual", "manual GUI"),
-    ("basic-analysis", "06-09 basic analysis"),
-    ("core-analysis", "core postmanual analysis"),
-    ("postmanual", "06-16 postmanual"),
-    ("custom", "custom selected steps"),
+    ("premanual", "Pre-manual processing and ROI candidates (00-05 + cellpose)"),
+    ("manual", "Manual ROI curation (manual)"),
+    ("postmanual", "Post-manual analysis and reports (06-18)"),
+    ("basic-analysis", "Basic response analysis (06-09)"),
+    ("core-analysis", "Core tuning and clustering analysis (06,08,09,10-14)"),
+    ("custom", "Custom selection (checked steps below)"),
 )
 
 
@@ -87,9 +89,17 @@ class PipelineDashboard(QMainWindow):
         self.pipeline_script = self.current_dir / "run_pipeline.py"
         self.settings = QSettings("calcium-imaging-pipeline", "pipeline-dashboard")
         self.process: QProcess | None = None
+        self.background_session_name: str | None = None
+        self.background_log_path: Path | None = None
+        self.background_status_path: Path | None = None
+        self.background_log_offset: int = 0
+        self.background_poll_counter: int = 0
         self._buffer = ""
         self.step_state: dict[str, str] = {step: "idle" for step, _ in STEP_ROWS}
         self.step_message: dict[str, str] = {step: "" for step, _ in STEP_ROWS}
+        self.background_poll_timer = QTimer(self)
+        self.background_poll_timer.setInterval(1500)
+        self.background_poll_timer.timeout.connect(self.poll_background_run)
 
         self.setWindowTitle("Calcium pipeline dashboard")
         self.resize(1180, 780)
@@ -126,6 +136,18 @@ class PipelineDashboard(QMainWindow):
 
         self.action_combo = QComboBox()
         self.action_combo.addItems(["skip", "overwrite"])
+        self.analysis_source_combo = QComboBox()
+        self.analysis_source_combo.addItem("Stimulus slices (recommended; steps 08/12)", "slices")
+        self.analysis_source_combo.addItem("Full traces (complete dF/F time series)", "traces")
+        self.analysis_source_combo.addItem("Summary features (scalar ROI metrics)", "features")
+        self.analysis_source_combo.addItem("Response scalars only", "responses")
+        self.cluster_normalization_combo = QComboBox()
+        self.cluster_normalization_combo.addItem("Normalized clustering (default)", "normalized")
+        self.cluster_normalization_combo.addItem("Raw/source-scale clustering", "raw")
+        self.cluster_normalization_combo.addItem("Both normalized and raw/source-scale", "both")
+        self.cluster_normalization_combo.setCurrentIndex(2)
+        self.background_run_check = QCheckBox("Background run (survive lock screen)")
+        self.background_run_check.setChecked(platform.system() == "Linux")
         self.step_dry_run_check = QCheckBox("step dry-run")
         self.step_dry_run_check.setChecked(False)
 
@@ -165,6 +187,8 @@ class PipelineDashboard(QMainWindow):
         config_form.addRow("Fiji", fiji_row)
         config_form.addRow("Step group", self.step_group_combo)
         config_form.addRow("Action", self.action_combo)
+        config_form.addRow("Analysis input", self.analysis_source_combo)
+        config_form.addRow("Cluster scaling", self.cluster_normalization_combo)
         config_form.addRow("Fiji memory", self.fiji_memory_edit)
         config_form.addRow("suite2p threads", self.suite2p_threads_spin)
         config_form.addRow("workers", self.n_workers_spin)
@@ -181,6 +205,7 @@ class PipelineDashboard(QMainWindow):
         button_row.addWidget(self.stop_btn)
         button_row.addWidget(manual_btn)
         button_row.addWidget(clear_log_btn)
+        button_row.addWidget(self.background_run_check)
         button_row.addWidget(self.step_dry_run_check)
         button_row.addStretch(1)
 
@@ -229,7 +254,7 @@ class PipelineDashboard(QMainWindow):
             self.extra_args_edit,
         ):
             control.textChanged.connect(self.update_command_preview)
-        for control in (self.action_combo, self.suite2p_threads_spin, self.n_workers_spin, self.num_threads_spin):
+        for control in (self.action_combo, self.analysis_source_combo, self.cluster_normalization_combo, self.suite2p_threads_spin, self.n_workers_spin, self.num_threads_spin):
             if hasattr(control, "currentIndexChanged"):
                 control.currentIndexChanged.connect(self.update_command_preview)
             else:
@@ -314,9 +339,9 @@ class PipelineDashboard(QMainWindow):
         group_steps = {
             "premanual": {"00", "01", "02", "03", "04", "05", "cellpose"},
             "manual": {"manual"},
+            "postmanual": {"06", "07", "08", "09", "10", "11", "12", "13", "14", "15", "16", "17", "18"},
             "basic-analysis": {"06", "07", "08", "09"},
-            "core-analysis": {"06", "08", "09", "trace", "10", "12"},
-            "postmanual": {"06", "07", "08", "09", "trace", "10", "11", "12", "13", "14", "15", "16"},
+            "core-analysis": {"06", "08", "09", "10", "11", "12", "13", "14"},
         }.get(str(value), set())
         self.step_list.blockSignals(True)
         for row in range(self.step_list.count()):
@@ -348,6 +373,12 @@ class PipelineDashboard(QMainWindow):
         if data_root:
             args.extend(["--data-root", data_root])
         args.extend(["--action", self.action_combo.currentText()])
+        source = str(self.analysis_source_combo.currentData())
+        args.extend(["--similarity-source", source])
+        args.extend(["--cluster-source", source])
+        if source != "angle":
+            args.extend(["--embedding-source", "features" if source == "angle" else source])
+        args.extend(["--cluster-normalization", str(self.cluster_normalization_combo.currentData())])
         conda_bin = self.conda_bin_edit.text().strip()
         if conda_bin:
             args.extend(["--conda-bin", conda_bin])
@@ -369,21 +400,27 @@ class PipelineDashboard(QMainWindow):
             args.extend(shlex.split(extra))
         return program, args
 
-    def process_environment(self) -> QProcessEnvironment:
-        env = QProcessEnvironment.systemEnvironment()
-        env.insert("PYTHONUNBUFFERED", "1")
+    def build_environment_map(self) -> dict[str, str]:
+        env = dict(os.environ)
+        env["PYTHONUNBUFFERED"] = "1"
         data_root = self.data_root_edit.text().strip()
         if data_root:
-            env.insert("DATA_ROOT", data_root)
-            env.insert("PIPELINE_TMPDIR", str(Path(data_root) / ".tmp"))
-            env.insert("PIPELINE_CACHE_DIR", str(Path(data_root) / ".cache"))
+            env["DATA_ROOT"] = data_root
+            env["PIPELINE_TMPDIR"] = str(Path(data_root) / ".tmp")
+            env["PIPELINE_CACHE_DIR"] = str(Path(data_root) / ".cache")
         fiji_bin = self.fiji_bin_edit.text().strip()
         if fiji_bin:
-            env.insert("FIJI_BIN", fiji_bin)
-        env.insert("FIJI_MEMORY", self.fiji_memory_edit.text().strip() or self.default_fiji_memory())
-        env.insert("SUITE2P_THREADS", str(self.suite2p_threads_spin.value()))
-        env.insert("N_WORKERS", str(self.n_workers_spin.value()))
-        env.insert("NUM_THREADS", str(self.num_threads_spin.value()))
+            env["FIJI_BIN"] = fiji_bin
+        env["FIJI_MEMORY"] = self.fiji_memory_edit.text().strip() or self.default_fiji_memory()
+        env["SUITE2P_THREADS"] = str(self.suite2p_threads_spin.value())
+        env["N_WORKERS"] = str(self.n_workers_spin.value())
+        env["NUM_THREADS"] = str(self.num_threads_spin.value())
+        return env
+
+    def process_environment(self) -> QProcessEnvironment:
+        env = QProcessEnvironment()
+        for key, value in self.build_environment_map().items():
+            env.insert(key, value)
         return env
 
     def update_command_preview(self) -> None:
@@ -398,6 +435,9 @@ class PipelineDashboard(QMainWindow):
         if self.process is not None and self.process.state() != QProcess.ProcessState.NotRunning:
             QMessageBox.warning(self, "Pipeline running", "A pipeline process is already running.")
             return
+        if self.background_session_name is not None:
+            QMessageBox.warning(self, "Pipeline running", "A pipeline process is already running.")
+            return
         try:
             program, args = self.build_command(plan_only=plan_only)
         except Exception as exc:
@@ -406,6 +446,9 @@ class PipelineDashboard(QMainWindow):
         self.save_data_root_default()
         self.reset_step_states()
         self.append_log(f"$ {subprocess_like_command([program, *args])}\n")
+        if self.background_run_check.isChecked() and not plan_only and platform.system() == "Linux":
+            self.start_background_pipeline(program, args)
+            return
         self.process = QProcess(self)
         self.process.setWorkingDirectory(str(self.current_dir))
         self.process.setProcessEnvironment(self.process_environment())
@@ -436,6 +479,16 @@ class PipelineDashboard(QMainWindow):
             QMessageBox.warning(self, "Manual GUI", "Could not launch manual ROI GUI.")
 
     def stop_pipeline(self) -> None:
+        if self.background_session_name is not None:
+            self.append_log(f"\nStopping background tmux session {self.background_session_name}...\n")
+            subprocess.run(
+                ["tmux", "kill-session", "-t", self.background_session_name],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.finish_background_run(exit_code=15, status_text="stopped")
+            return
         if self.process is None or self.process.state() == QProcess.ProcessState.NotRunning:
             return
         self.append_log("\nStopping pipeline process...\n")
@@ -543,6 +596,104 @@ class PipelineDashboard(QMainWindow):
                 if state == "running":
                     self.step_state[step] = "failed"
                     self.step_message[step] = f"process exited with code {exit_code}"
+        self.refresh_step_table()
+        self.update_button_state(False)
+
+    def background_log_root(self) -> Path:
+        data_root = self.data_root_edit.text().strip()
+        if data_root:
+            return Path(data_root) / "pipeline_logs"
+        return self.repo_root / "pipeline_logs"
+
+    def start_background_pipeline(self, program: str, args: list[str]) -> None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        session_name = f"calcium-pipeline-{timestamp}"
+        log_root = self.background_log_root()
+        log_root.mkdir(parents=True, exist_ok=True)
+        log_path = log_root / f"{session_name}.log"
+        status_path = log_root / f"{session_name}.exitcode"
+        env_map = self.build_environment_map()
+        command_text = subprocess_like_command([program, *args])
+        shell_command = (
+            f"cd {shlex.quote(str(self.current_dir))} && "
+            f"{command_text} >> {shlex.quote(str(log_path))} 2>&1; "
+            f"status=$?; "
+            f"printf '%s\\n' \"$status\" > {shlex.quote(str(status_path))}"
+        )
+        if status_path.exists():
+            status_path.unlink()
+        completed = subprocess.run(
+            ["tmux", "new-session", "-d", "-s", session_name, "/bin/bash", "-lc", shell_command],
+            capture_output=True,
+            text=True,
+            env=env_map,
+        )
+        if completed.returncode != 0:
+            stderr = completed.stderr.strip() or completed.stdout.strip() or "Could not launch background run."
+            QMessageBox.warning(self, "Pipeline start", stderr)
+            return
+        self.background_session_name = session_name
+        self.background_log_path = log_path
+        self.background_status_path = status_path
+        self.background_log_offset = 0
+        self.background_poll_counter = 0
+        self.append_log(f"Background tmux session: {session_name}\n")
+        self.append_log(f"Background log: {log_path}\n")
+        self.background_poll_timer.start()
+        self.update_button_state(True)
+
+    def read_background_log_increment(self) -> None:
+        if self.background_log_path is None or not self.background_log_path.exists():
+            return
+        with self.background_log_path.open("r", encoding="utf-8", errors="replace") as handle:
+            handle.seek(self.background_log_offset)
+            text = handle.read()
+            self.background_log_offset = handle.tell()
+        if text:
+            self.consume_output(text)
+
+    def poll_background_run(self) -> None:
+        if self.background_session_name is None:
+            self.background_poll_timer.stop()
+            return
+        self.read_background_log_increment()
+        self.background_poll_counter += 1
+        if self.background_poll_counter % 2 != 0:
+            return
+        completed = subprocess.run(
+            ["tmux", "has-session", "-t", self.background_session_name],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if completed.returncode == 0:
+            return
+        exit_code = 1
+        status_text = "finished"
+        if self.background_status_path is not None and self.background_status_path.exists():
+            try:
+                exit_code = int(self.background_status_path.read_text(encoding="utf-8").strip() or "1")
+            except ValueError:
+                exit_code = 1
+                status_text = "finished-invalid-exitcode"
+        else:
+            status_text = "finished-no-exitcode"
+        self.finish_background_run(exit_code=exit_code, status_text=status_text)
+
+    def finish_background_run(self, exit_code: int, status_text: str) -> None:
+        self.background_poll_timer.stop()
+        self.read_background_log_increment()
+        self.background_session_name = None
+        self.background_log_path = None
+        self.background_status_path = None
+        self.background_log_offset = 0
+        self.background_poll_counter = 0
+        self.append_log(f"\nBackground pipeline finished with exit code {exit_code} ({status_text}).\n")
+        if exit_code != 0:
+            for step, state in list(self.step_state.items()):
+                if state == "running":
+                    self.step_state[step] = "failed"
+                    self.step_message[step] = f"background run exited with code {exit_code}"
         self.refresh_step_table()
         self.update_button_state(False)
 

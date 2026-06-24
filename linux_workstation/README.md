@@ -159,7 +159,7 @@ bash linux_workstation/clean_generated_outputs.sh "$DATA_ROOT"
 bash linux_workstation/clean_generated_outputs.sh "$DATA_ROOT" --execute
 ```
 
-如果想把 manual GUI 和 06-16 后续分析输出也一起删：
+如果想把 manual GUI 和 06-18 后续分析输出也一起删：
 
 ```bash
 bash linux_workstation/clean_generated_outputs.sh "$DATA_ROOT" --scope all-generated --execute
@@ -239,7 +239,7 @@ bash linux_workstation/run_00_05_suite2p.sh "$DATA_ROOT"
 
 ## 打开 dashboard GUI
 
-工作站上单独准备了轻量 GUI 环境 `dashboard_gui`，用于打开总控 dashboard。这个环境只负责显示 dashboard；真正跑 00-05、manual、06-16 时，dashboard 仍然会按步骤调用对应的 conda 环境。
+工作站上单独准备了轻量 GUI 环境 `dashboard_gui`，用于打开总控 dashboard。这个环境只负责显示 dashboard；真正跑 00-05、manual、06-18 时，dashboard 仍然会按步骤调用对应的 conda 环境。
 
 ```bash
 bash linux_workstation/launch_pipeline_dashboard.sh "$DATA_ROOT"

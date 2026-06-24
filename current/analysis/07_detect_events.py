@@ -18,6 +18,7 @@ import csv
 import json
 import logging
 import shutil
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -167,6 +168,30 @@ def clean_step_outputs(out_dir: Path) -> int:
     return removed
 
 
+def make_temp_output_dir(out_dir: Path) -> Path:
+    out_dir.parent.mkdir(parents=True, exist_ok=True)
+    return Path(tempfile.mkdtemp(prefix=f".{out_dir.name}.tmp-", dir=out_dir.parent))
+
+
+def remove_path(path: Path) -> None:
+    if path.is_dir():
+        shutil.rmtree(path)
+    elif path.exists() or path.is_symlink():
+        path.unlink()
+
+
+def install_temp_outputs(temp_dir: Path, out_dir: Path, clean_existing: bool) -> None:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    if clean_existing:
+        clean_step_outputs(out_dir)
+    for src in temp_dir.iterdir():
+        dst = out_dir / src.name
+        if dst.exists() or dst.is_symlink():
+            remove_path(dst)
+        shutil.move(str(src), str(dst))
+    shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 def copy_if_exists(src: Path | None, dst: Path) -> bool:
     if src is None or not src.exists():
         return False
@@ -230,6 +255,19 @@ def robust_sigma(trace: np.ndarray) -> tuple[float, float, float]:
     return median, mad, sigma
 
 
+def integrate_trace_auc(values: np.ndarray, dx: float) -> float:
+    values = np.asarray(values, dtype=float)
+    if hasattr(np, "trapezoid"):
+        return float(np.trapezoid(values, dx=dx))
+    return float(np.trapz(values, dx=dx))
+
+
+def check_runtime_compatibility() -> None:
+    if not hasattr(np, "trapezoid") and not hasattr(np, "trapz"):
+        raise RuntimeError("NumPy has neither np.trapezoid nor np.trapz; event AUC integration cannot run.")
+    _ = integrate_trace_auc(np.asarray([0.0, 1.0], dtype=float), dx=1.0)
+
+
 def detect_events_robust_threshold(
     trace: np.ndarray,
     fps: float,
@@ -257,7 +295,7 @@ def detect_events_robust_threshold(
         segment = trace[onset : offset + 1]
         peak = int(onset + np.nanargmax(segment))
         amplitude = float(trace[peak] - baseline)
-        auc = float(np.trapz(np.maximum(segment - baseline, 0), dx=1.0 / fps))
+        auc = integrate_trace_auc(np.maximum(segment - baseline, 0), dx=1.0 / fps)
         events.append(
             {
                 "onset_frame": int(onset),
@@ -318,7 +356,7 @@ def detect_events_find_peaks(
                 "amplitude": amplitude,
                 "prominence": prominence,
                 "duration_sec": float((offset - onset + 1) / fps),
-                "auc": float(np.trapz(np.maximum(segment - baseline, 0), dx=1.0 / fps)),
+                "auc": integrate_trace_auc(np.maximum(segment - baseline, 0), dx=1.0 / fps),
                 "baseline": baseline,
                 "mad": mad,
                 "robust_sigma": sigma,
@@ -586,10 +624,9 @@ def save_all_roi_event_pdfs(
 
 def process_trial(trial: TrialInput, out_dir: Path, args: argparse.Namespace) -> tuple[str, dict]:
     if not trial.dff_path.exists() or not trial.roi_table_path.exists():
-        return "failed", {"trial_id": trial.trial_id, "status": "failed", "message": "Missing dff.npy or roi_table.csv"}
+        return "skipped", {"trial_id": trial.trial_id, "status": "skipped", "message": "Missing dff.npy or roi_table.csv"}
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    copy_sidecar_outputs(trial, out_dir)
 
     dff = np.load(trial.dff_path, allow_pickle=True).astype(np.float32, copy=False)
     if dff.ndim != 2:
@@ -666,6 +703,7 @@ def process_trial(trial: TrialInput, out_dir: Path, args: argparse.Namespace) ->
             trial_id=trial.trial_id,
             dpi=args.dpi,
         )
+    copy_sidecar_outputs(trial, out_dir)
     return "processed", summary
 
 
@@ -697,6 +735,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     configure_logging(args.verbose)
+    try:
+        check_runtime_compatibility()
+    except Exception as exc:
+        LOGGER.error("Runtime compatibility check failed before trial processing: %s", exc)
+        return 1
 
     data_root = args.data_root.expanduser().resolve()
     output_root = args.output_root.expanduser().resolve() if args.output_root else default_output_root(data_root).resolve()
@@ -731,10 +774,13 @@ def main(argv: list[str] | None = None) -> int:
             summary.processed += 1
             LOGGER.info("[dry-run] Would detect calcium events from %s -> %s", trial.dff_path, out_dir)
             continue
-        if args.action == "overwrite":
-            clean_step_outputs(out_dir)
+        temp_dir = make_temp_output_dir(out_dir)
         try:
-            status, row = process_trial(trial, out_dir, args)
+            status, row = process_trial(trial, temp_dir, args)
+            if status == "processed":
+                install_temp_outputs(temp_dir, out_dir, clean_existing=args.action == "overwrite")
+            else:
+                shutil.rmtree(temp_dir, ignore_errors=True)
             rows.append(row)
             if status == "processed":
                 summary.processed += 1
@@ -746,6 +792,7 @@ def main(argv: list[str] | None = None) -> int:
                 summary.failed += 1
                 LOGGER.error("[failed] %s: %s", trial.trial_id, row.get("message"))
         except Exception as exc:
+            shutil.rmtree(temp_dir, ignore_errors=True)
             summary.failed += 1
             LOGGER.exception("[failed] %s: %s", trial.trial_id, exc)
             rows.append({"trial_id": trial.trial_id, "status": "failed", "message": str(exc)})

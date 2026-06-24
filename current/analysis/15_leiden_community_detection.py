@@ -14,9 +14,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from trial_context_utils import load_excluded_trial_ids
+
 
 LOGGER = logging.getLogger("leiden")
-STEP_NAME = "13_leiden"
+STEP_NAME = "15_leiden"
 STEP_OUTPUT_PATTERNS = (
     "*_leiden_labels.csv",
     "*_graph_edges.csv",
@@ -63,11 +65,11 @@ def default_output_root(data_root: Path) -> Path:
 
 
 def default_input_root(output_root: Path) -> Path:
-    return output_root / "11_population_similarity"
+    return output_root / "13_population_similarity"
 
 
 def default_feature_root(output_root: Path) -> Path:
-    return output_root / "10_population_features"
+    return output_root / "11_population_features"
 
 
 def step_output_root(output_root: Path) -> Path:
@@ -86,16 +88,18 @@ def find_first_existing(folder: Path, patterns: tuple[str, ...]) -> Path | None:
     return None
 
 
-def discover_trials(similarity_root: Path, feature_root: Path) -> list[TrialInput]:
+def discover_trials(similarity_root: Path, feature_root: Path, trial_id: str | None = None) -> list[TrialInput]:
     trials = []
     for summary_path in sorted(similarity_root.rglob("*_population_similarity_summary.json")):
         similarity_dir = summary_path.parent
-        trial_id = similarity_dir.name
+        current_trial_id = similarity_dir.name
+        if trial_id and current_trial_id != trial_id:
+            continue
         rel_parent = similarity_dir.parent.relative_to(similarity_root)
-        feature_dir = feature_root / rel_parent / trial_id
+        feature_dir = feature_root / rel_parent / current_trial_id
         trials.append(
             TrialInput(
-                trial_id=trial_id,
+                trial_id=current_trial_id,
                 rel_parent=rel_parent,
                 similarity_dir=similarity_dir,
                 feature_dir=feature_dir,
@@ -107,13 +111,27 @@ def discover_trials(similarity_root: Path, feature_root: Path) -> list[TrialInpu
     return trials
 
 
+def read_summary_status(summary_path: Path) -> str | None:
+    if not summary_path.exists() or summary_path.stat().st_size <= 0:
+        return None
+    try:
+        payload = json.loads(summary_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    status = payload.get("status")
+    return str(status) if status is not None else None
+
+
 def required_outputs_done(out_dir: Path, trial_id: str) -> bool:
     required = (
         out_dir / f"{trial_id}_leiden_labels.csv",
         out_dir / f"{trial_id}_graph_edges.csv",
+        out_dir / f"{trial_id}_leiden_community_summary.csv",
         out_dir / f"{trial_id}_leiden_summary.json",
     )
-    return all(path.exists() and path.stat().st_size > 0 for path in required)
+    if not all(path.exists() and path.stat().st_size > 0 for path in required):
+        return False
+    return read_summary_status(out_dir / f"{trial_id}_leiden_summary.json") == "ok"
 
 
 def clean_step_outputs(out_dir: Path) -> int:
@@ -134,9 +152,14 @@ def load_optional_dependencies():
     try:
         import igraph as ig  # type: ignore
         import leidenalg  # type: ignore
+        return {"backend": "leiden", "igraph": ig, "leidenalg": leidenalg, "reason": None}
     except Exception as exc:
-        return None, None, str(exc)
-    return ig, leidenalg, None
+        leiden_reason = str(exc)
+    try:
+        import networkx as nx  # type: ignore
+        return {"backend": "networkx", "networkx": nx, "reason": leiden_reason}
+    except Exception as exc:
+        return {"backend": None, "reason": f"{leiden_reason}; networkx fallback unavailable: {exc}"}
 
 
 def write_skipped_outputs(trial: TrialInput, out_dir: Path, reason: str) -> tuple[str, dict]:
@@ -173,7 +196,58 @@ def write_skipped_outputs(trial: TrialInput, out_dir: Path, reason: str) -> tupl
     return "processed", summary
 
 
-def build_graph(edges: pd.DataFrame, roi_ids: np.ndarray, ig):
+def write_disconnected_outputs(
+    trial: TrialInput,
+    out_dir: Path,
+    features: pd.DataFrame,
+    trace_matrix_path: Path | None,
+    reason: str,
+    dpi: int,
+) -> tuple[str, dict]:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    label_cols = [
+        col
+        for col in (
+            "trial_id",
+            "roi_id",
+            "source_roi_id",
+            "roi_source",
+            "roi_type",
+            "manual_roi_id",
+            "suite2p_original_id",
+            "previous_suite2p_original_id",
+            "stat_index",
+        )
+        if col in features.columns
+    ]
+    labels = features[label_cols].copy() if label_cols else pd.DataFrame({"roi_id": np.arange(len(features)) + 1})
+    labels["leiden_community"] = np.arange(len(labels), dtype=int)
+    labels.to_csv(out_dir / f"{trial.trial_id}_leiden_labels.csv", index=False)
+    pd.DataFrame(columns=["source_roi_id", "target_roi_id", "weight"]).to_csv(out_dir / f"{trial.trial_id}_graph_edges.csv", index=False)
+    community_summary = labels.groupby("leiden_community", as_index=False).agg(n_roi=("roi_id", "count"))
+    community_summary.to_csv(out_dir / f"{trial.trial_id}_leiden_community_summary.csv", index=False)
+    save_embedding(features, labels, out_dir / f"{trial.trial_id}_leiden_roi_spatial_map.png", trial.trial_id, dpi)
+    save_embedding(features, labels, out_dir / f"{trial.trial_id}_leiden_embedding.png", trial.trial_id, dpi)
+    if trace_matrix_path and trace_matrix_path.exists():
+        trace_matrix = np.load(trace_matrix_path, allow_pickle=True)
+        trace_matrix = np.asarray(trace_matrix)
+        if trace_matrix.ndim == 2 and trace_matrix.shape[0] == len(labels):
+            save_mean_traces(trace_matrix, labels, out_dir / f"{trial.trial_id}_community_mean_traces.png", trial.trial_id, dpi)
+    summary = {
+        "trial_id": trial.trial_id,
+        "status": "ok",
+        "n_roi": int(len(features)),
+        "n_edges": 0,
+        "n_communities": int(len(labels)),
+        "resolution": np.nan,
+        "community_method": "disconnected_singletons",
+        "reason": reason,
+    }
+    (out_dir / f"{trial.trial_id}_leiden_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    return "processed", summary
+
+
+def build_graph(edges: pd.DataFrame, roi_ids: np.ndarray):
     id_to_vertex = {int(roi_id): index for index, roi_id in enumerate(roi_ids)}
     graph_edges = []
     weights = []
@@ -184,10 +258,49 @@ def build_graph(edges: pd.DataFrame, roi_ids: np.ndarray, ig):
             continue
         graph_edges.append((id_to_vertex[source], id_to_vertex[target]))
         weights.append(float(row.get("similarity", row.get("weight", 1.0))))
-    graph = ig.Graph(n=len(roi_ids), edges=graph_edges, directed=False)
-    if weights:
-        graph.es["weight"] = weights
-    return graph, graph_edges, weights
+    return id_to_vertex, graph_edges, weights
+
+
+def run_community_detection(
+    backend_info: dict,
+    roi_ids: np.ndarray,
+    graph_edges: list[tuple[int, int]],
+    weights: list[float],
+    resolution: float,
+    random_seed: int,
+) -> tuple[np.ndarray, str]:
+    backend = backend_info.get("backend")
+    if backend == "leiden":
+        ig = backend_info["igraph"]
+        leidenalg = backend_info["leidenalg"]
+        graph = ig.Graph(n=len(roi_ids), edges=graph_edges, directed=False)
+        if weights:
+            graph.es["weight"] = weights
+        partition = leidenalg.find_partition(
+            graph,
+            leidenalg.RBConfigurationVertexPartition,
+            weights=graph.es["weight"] if weights else None,
+            resolution_parameter=resolution,
+            seed=random_seed,
+        )
+        return np.asarray(partition.membership, dtype=int), "leiden"
+    if backend == "networkx":
+        nx = backend_info["networkx"]
+        graph = nx.Graph()
+        graph.add_nodes_from(range(len(roi_ids)))
+        for edge_index, (source, target) in enumerate(graph_edges):
+            weight = float(weights[edge_index]) if edge_index < len(weights) else 1.0
+            graph.add_edge(source, target, weight=weight)
+        communities = list(nx.algorithms.community.greedy_modularity_communities(graph, weight="weight"))
+        membership = np.full(len(roi_ids), -1, dtype=int)
+        for community_index, members in enumerate(communities):
+            for member in members:
+                membership[int(member)] = community_index
+        orphan_mask = membership < 0
+        if orphan_mask.any():
+            membership[orphan_mask] = np.arange(int(orphan_mask.sum()), dtype=int) + len(communities)
+        return membership, "networkx_greedy_modularity"
+    raise RuntimeError(f"No community detection backend is available: {backend_info.get('reason')}")
 
 
 def save_embedding(features: pd.DataFrame, labels: pd.DataFrame, out_path: Path, trial_id: str, dpi: int) -> None:
@@ -234,7 +347,7 @@ def save_mean_traces(trace_matrix: np.ndarray, labels: pd.DataFrame, out_path: P
         plt.close(fig)
 
 
-def process_trial(trial: TrialInput, out_dir: Path, args: argparse.Namespace, ig, leidenalg) -> tuple[str, dict]:
+def process_trial(trial: TrialInput, out_dir: Path, args: argparse.Namespace, backend_info: dict) -> tuple[str, dict]:
     out_dir.mkdir(parents=True, exist_ok=True)
     if trial.edge_path is None or not trial.edge_path.exists():
         return write_skipped_outputs(trial, out_dir, "missing similarity edge table")
@@ -242,22 +355,26 @@ def process_trial(trial: TrialInput, out_dir: Path, args: argparse.Namespace, ig
         return write_skipped_outputs(trial, out_dir, "missing feature matrix")
 
     features = pd.read_csv(trial.feature_matrix_path)
-    edges = pd.read_csv(trial.edge_path)
-    if features.empty or edges.empty:
-        return write_skipped_outputs(trial, out_dir, "empty feature matrix or graph")
+    try:
+        edges = pd.read_csv(trial.edge_path)
+    except pd.errors.EmptyDataError:
+        edges = pd.DataFrame(columns=["source_roi_id", "target_roi_id", "similarity"])
+    if features.empty:
+        return write_skipped_outputs(trial, out_dir, "empty feature matrix")
+    if edges.empty:
+        return write_disconnected_outputs(trial, out_dir, features, trial.trace_matrix_path, "graph has no edges", args.dpi)
     roi_ids = features["roi_id"].astype(int).to_numpy()
-    graph, graph_edges, weights = build_graph(edges, roi_ids, ig)
-    if graph.ecount() == 0:
-        return write_skipped_outputs(trial, out_dir, "graph has no edges")
-
-    partition = leidenalg.find_partition(
-        graph,
-        leidenalg.RBConfigurationVertexPartition,
-        weights=graph.es["weight"] if weights else None,
-        resolution_parameter=args.resolution,
-        seed=args.random_seed,
+    _, graph_edges, weights = build_graph(edges, roi_ids)
+    if not graph_edges:
+        return write_disconnected_outputs(trial, out_dir, features, trial.trace_matrix_path, "graph has no edges", args.dpi)
+    communities, community_method = run_community_detection(
+        backend_info=backend_info,
+        roi_ids=roi_ids,
+        graph_edges=graph_edges,
+        weights=weights,
+        resolution=args.resolution,
+        random_seed=args.random_seed,
     )
-    communities = np.asarray(partition.membership, dtype=int)
     label_cols = [
         col
         for col in (
@@ -290,9 +407,10 @@ def process_trial(trial: TrialInput, out_dir: Path, args: argparse.Namespace, ig
         "trial_id": trial.trial_id,
         "status": "ok",
         "n_roi": int(len(features)),
-        "n_edges": int(graph.ecount()),
+        "n_edges": int(len(graph_edges)),
         "n_communities": int(len(set(communities.tolist()))),
         "resolution": float(args.resolution),
+        "community_method": community_method,
     }
     (out_dir / f"{trial.trial_id}_leiden_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     return "processed", summary
@@ -301,11 +419,12 @@ def process_trial(trial: TrialInput, out_dir: Path, args: argparse.Namespace, ig
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run optional Leiden community detection.")
     parser.add_argument("--data-root", type=Path, required=True)
-    parser.add_argument("--input-root", type=Path, help="Step-11 root. Default: OUTPUT_ROOT/11_population_similarity.")
-    parser.add_argument("--feature-root", type=Path, help="Step-10 root. Default: OUTPUT_ROOT/10_population_features.")
+    parser.add_argument("--input-root", type=Path, help="Step-13 root. Default: OUTPUT_ROOT/13_population_similarity.")
+    parser.add_argument("--feature-root", type=Path, help="Step-11 root. Default: OUTPUT_ROOT/11_population_features.")
     parser.add_argument("--output-root", type=Path, help="Pipeline output root. Default: DATA_ROOT.")
     parser.add_argument("--action", choices=("skip", "overwrite"), default="skip")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--trial-id", default=None, help="Optional trial folder name to process.")
     parser.add_argument("--resolution", type=float, default=1.0)
     parser.add_argument("--random-seed", type=int, default=0)
     parser.add_argument("--dpi", type=int, default=150)
@@ -326,11 +445,20 @@ def main(argv: list[str] | None = None) -> int:
         LOGGER.error("Input root does not exist: %s", input_root)
         return 1
 
-    ig, leidenalg, missing_reason = load_optional_dependencies()
-    if missing_reason:
-        LOGGER.warning("Optional Leiden dependency missing: %s", missing_reason)
+    backend_info = load_optional_dependencies()
+    backend = backend_info.get("backend")
+    missing_reason = backend_info.get("reason")
+    if backend == "leiden":
+        LOGGER.info("Community backend: Leiden (igraph/leidenalg)")
+    elif backend == "networkx":
+        LOGGER.warning("Leiden dependency missing; falling back to networkx greedy modularity: %s", missing_reason)
+    else:
+        LOGGER.warning("No community backend available: %s", missing_reason)
 
-    trials = discover_trials(input_root, feature_root)
+    trials = discover_trials(input_root, feature_root, trial_id=args.trial_id)
+    excluded_trial_ids = load_excluded_trial_ids(output_root)
+    if excluded_trial_ids:
+        trials = [trial for trial in trials if trial.trial_id not in excluded_trial_ids]
     summary = RunSummary(found=len(trials))
     rows = []
     LOGGER.info("Input root : %s", input_root)
@@ -349,13 +477,19 @@ def main(argv: list[str] | None = None) -> int:
         if args.action == "overwrite":
             clean_step_outputs(out_dir)
         try:
-            if missing_reason:
+            if backend is None:
                 _, row = write_skipped_outputs(trial, out_dir, f"optional dependency missing: {missing_reason}")
             else:
-                _, row = process_trial(trial, out_dir, args, ig, leidenalg)
+                _, row = process_trial(trial, out_dir, args, backend_info)
             rows.append(row)
             summary.processed += 1
-            LOGGER.info("[%s] %s: n_communities=%s", row.get("status"), trial.trial_id, row.get("n_communities"))
+            LOGGER.info(
+                "[%s] %s: n_communities=%s method=%s",
+                row.get("status"),
+                trial.trial_id,
+                row.get("n_communities"),
+                row.get("community_method", "skipped"),
+            )
         except Exception as exc:
             summary.failed += 1
             rows.append({"trial_id": trial.trial_id, "status": "failed", "message": str(exc)})

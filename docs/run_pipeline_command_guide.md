@@ -17,6 +17,14 @@ python3 current/run_pipeline.py \
 
 `--action skip` 是安全模式：已有结果就跳过，不会覆盖。只有确认要重算某一步时，再用 `--action overwrite`。
 
+当前测试数据集路径：
+
+```text
+/Volumes/Yifei_Ding/20260617_test
+```
+
+本地和工作站的数据根目录都按同一套规则放置：`00_original_files/` 存显微镜原始数据，`00_stim_logs_raw/` 存刺激控制程序导出的原始参数合集。`stim_logs/` 如果存在，只是旧步骤兼容用的 flat index。
+
 ## 当前主流程
 
 现在流程分成三段：
@@ -24,21 +32,22 @@ python3 current/run_pipeline.py \
 ```text
 自动前半段：00 -> 01 -> 02 -> 03 -> 04 -> 05
 人工校对：manual
-自动后半段：06 -> 07 -> 08 -> 09 -> 10 -> 11 -> 12 -> 13 -> 14 -> 15 -> 16
+自动后半段：06 -> 07 -> 08 -> 09 -> 10 -> 11 -> 12 -> 13 -> 14 -> 15 -> 16 -> 17 -> 18
 ```
 
 意思是：
 
 - 00-05 负责把原始数据整理、转 TIFF、提取刺激、运动校正、生成 high-pass 底片、跑 suite2p 候选 ROI。
 - `manual` 是唯一需要人工操作的步骤，用 GUI 挑选 suite2p 候选 ROI，也可以手画补 ROI。
-- 06-16 负责从最终 ROI 抽 trace、算 dF/F、event、刺激响应、角度调谐、population 分析和报告。
+- 06-18 负责从最终 ROI 抽 trace、算 dF/F、event、刺激响应、角度调谐、stimulus-slice feature、population 分析和报告。
 
 重要逻辑：
 
 - 05 默认用 `03_motion_correct` 跑 suite2p；`04_spatial_highpass` 仍然生成，主要给 manual GUI 显示 ROI 边界。
 - 05 产生的 suite2p 结果只当作 ROI 位置和形状候选。
-- 06 默认优先读取 manual GUI 保存的最终 ROI set；没有 manual 结果的 trial 才回退到 suite2p `iscell.npy`。
+- 06 默认使用 `--roi-source auto`：优先读取 manual GUI 保存的最终 ROI set；没有 manual 结果的 trial 才回退到 suite2p `iscell.npy`。旧 05c curated ROI 路线已归档，不再作为 current 主线的默认来源。
 - 06 默认从 `03_motion_correct` 重新抽 F、Fneu 和 dF/F，不直接相信 high-pass 图上的 suite2p trace。
+- 12 默认把 08 的 peri-stimulus tensor 转成 normalized stimulus-slice feature matrix，并为每个 ROI x stimulus slice 输出 `stimulus_evoked_flag`。判定标准同时看 amplitude、onset latency 和 offset recovery；后续 13 similarity、14 hierarchical clustering、16 PCA/UMAP 默认使用这些 slice features。
 
 ## 一次跑自动前半段
 
@@ -47,7 +56,7 @@ cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipel
 
 python3 current/run_pipeline.py \
   --steps premanual \
-  --data-root /Users/dingyifei/Documents/calcium-imaging-pipeline-new/test_dataset \
+  --data-root /Volumes/Yifei_Ding/20260617_test \
   --action skip
 ```
 
@@ -58,7 +67,7 @@ cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipel
 
 python3 current/run_pipeline.py \
   --steps premanual \
-  --data-root /Users/dingyifei/Documents/calcium-imaging-pipeline-new/test_dataset \
+  --data-root /Volumes/Yifei_Ding/20260617_test \
   --dry-run
 ```
 
@@ -71,7 +80,7 @@ cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipel
 
 python3 current/run_pipeline.py \
   --steps manual \
-  --data-root /Users/dingyifei/Documents/calcium-imaging-pipeline-new/test_dataset
+  --data-root /Volumes/Yifei_Ding/20260617_test
 ```
 
 直接打开某个 trial：
@@ -81,7 +90,7 @@ cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipel
 
 python3 current/run_pipeline.py \
   --steps manual \
-  --data-root /Users/dingyifei/Documents/calcium-imaging-pipeline-new/test_dataset \
+  --data-root /Volumes/Yifei_Ding/20260617_test \
   --trial-id 20260428_Euprymna_retina2_25x
 ```
 
@@ -100,7 +109,7 @@ cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipel
 
 python3 current/run_pipeline.py \
   --steps postmanual \
-  --data-root /Users/dingyifei/Documents/calcium-imaging-pipeline-new/test_dataset \
+  --data-root /Volumes/Yifei_Ding/20260617_test \
   --action skip
 ```
 
@@ -111,8 +120,23 @@ cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipel
 
 python3 current/run_pipeline.py \
   --steps postmanual \
-  --data-root /Users/dingyifei/Documents/calcium-imaging-pipeline-new/test_dataset \
+  --data-root /Volumes/Yifei_Ding/20260617_test \
   --dry-run
+```
+
+后半段的推荐功能聚类入口是 stimulus slices：
+
+```bash
+cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipeline-new
+
+python3 current/run_pipeline.py \
+  --steps postmanual \
+  --data-root /Volumes/Yifei_Ding/20260617_test \
+  --action skip \
+  --similarity-source slices \
+  --cluster-source slices \
+  --embedding-source slices \
+  --cluster-normalization both
 ```
 
 ## 单独运行某一步
@@ -124,7 +148,7 @@ cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipel
 
 python3 current/run_pipeline.py \
   --steps 02 \
-  --data-root /Users/dingyifei/Documents/calcium-imaging-pipeline-new/test_dataset \
+  --data-root /Volumes/Yifei_Ding/20260617_test \
   --action skip
 ```
 
@@ -135,7 +159,7 @@ cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipel
 
 python3 current/run_pipeline.py \
   --steps 05 \
-  --data-root /Users/dingyifei/Documents/calcium-imaging-pipeline-new/test_dataset \
+  --data-root /Volumes/Yifei_Ding/20260617_test \
   --action overwrite
 ```
 
@@ -146,11 +170,11 @@ cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipel
 
 python3 current/run_pipeline.py \
   --steps 06 \
-  --data-root /Users/dingyifei/Documents/calcium-imaging-pipeline-new/test_dataset \
+  --data-root /Volumes/Yifei_Ding/20260617_test \
   --action overwrite
 ```
 
-06 默认会优先使用 manual GUI 的最终 ROI set，并从 `03_motion_correct` 重新抽 trace。如果临时想强制只用 suite2p ROI，可以加：
+06 默认会优先使用 manual GUI 的最终 ROI set；没有 manual 结果时回退到 suite2p `iscell.npy`，并从 `03_motion_correct` 重新抽 trace。如果临时想强制只用 suite2p ROI，可以加：
 
 ```bash
 --roi-source suite2p

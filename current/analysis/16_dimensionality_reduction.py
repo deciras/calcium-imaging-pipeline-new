@@ -14,9 +14,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from trial_context_utils import load_excluded_trial_ids
+
 
 LOGGER = logging.getLogger("dimensionality_reduction")
-STEP_NAME = "14_dimensionality_reduction"
+STEP_NAME = "16_dimensionality_reduction"
 STEP_OUTPUT_PATTERNS = (
     "*_pca_embedding.csv",
     "*_pca_variance.csv",
@@ -38,6 +40,11 @@ class TrialInput:
     rel_parent: Path
     input_dir: Path
     feature_matrix_path: Path
+    z_feature_matrix_path: Path
+    trace_matrix_path: Path | None
+    response_matrix_path: Path | None
+    slice_matrix_path: Path | None
+    slice_columns_path: Path | None
     cluster_labels_path: Path | None
 
 
@@ -49,6 +56,10 @@ class RunSummary:
     failed: int = 0
 
 
+class TrialSkipError(RuntimeError):
+    """Raised when a trial has no valid matrix to embed."""
+
+
 def configure_logging(verbose: bool) -> None:
     logging.basicConfig(level=logging.DEBUG if verbose else logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
 
@@ -58,7 +69,11 @@ def default_output_root(data_root: Path) -> Path:
 
 
 def default_input_root(output_root: Path) -> Path:
-    return output_root / "10_population_features"
+    return output_root / "11_population_features"
+
+
+def default_slice_root(output_root: Path) -> Path:
+    return output_root / "12_stimulus_slice_features"
 
 
 def step_output_root(output_root: Path) -> Path:
@@ -77,19 +92,25 @@ def find_first_existing(folder: Path, patterns: tuple[str, ...]) -> Path | None:
     return None
 
 
-def discover_trials(output_root: Path, input_root: Path) -> list[TrialInput]:
-    cluster_root = output_root / "12_hierarchical_clustering"
+def discover_trials(output_root: Path, input_root: Path, slice_root: Path) -> list[TrialInput]:
+    cluster_root = output_root / "14_hierarchical_clustering"
     trials = []
     for feature_path in sorted(input_root.rglob("*_roi_feature_matrix_zscored.csv")):
         input_dir = feature_path.parent
         trial_id = input_dir.name
         rel_parent = input_dir.parent.relative_to(input_root)
+        slice_dir = slice_root / rel_parent / trial_id
         trials.append(
             TrialInput(
                 trial_id=trial_id,
                 rel_parent=rel_parent,
                 input_dir=input_dir,
-                feature_matrix_path=feature_path,
+                feature_matrix_path=input_dir / f"{trial_id}_roi_feature_matrix.csv",
+                z_feature_matrix_path=feature_path,
+                trace_matrix_path=find_first_existing(input_dir, ("*_trace_matrix.npy",)),
+                response_matrix_path=find_first_existing(input_dir, ("*_response_matrix.npy",)),
+                slice_matrix_path=find_first_existing(slice_dir, ("*_stim_slice_feature_matrix_zscored.npy", "*_stim_slice_feature_matrix.npy")),
+                slice_columns_path=find_first_existing(slice_dir, ("*_stim_slice_feature_columns.csv",)),
                 cluster_labels_path=find_first_existing(cluster_root / rel_parent / trial_id, ("*_hierarchical_cluster_labels.csv",)),
             )
         )
@@ -119,6 +140,21 @@ def clean_step_outputs(out_dir: Path) -> int:
     return removed
 
 
+def write_skipped_outputs(trial: TrialInput, out_dir: Path, reason: str) -> tuple[str, dict]:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(columns=["PC1", "PC2", "trial_id", "roi_id"]).to_csv(out_dir / f"{trial.trial_id}_pca_embedding.csv", index=False)
+    pd.DataFrame(columns=["component", "explained_variance_ratio"]).to_csv(out_dir / f"{trial.trial_id}_pca_variance.csv", index=False)
+    summary = {
+        "trial_id": trial.trial_id,
+        "status": "skipped",
+        "reason": reason,
+        "n_roi": 0,
+        "n_features": 0,
+    }
+    (out_dir / f"{trial.trial_id}_embedding_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    return "skipped", summary
+
+
 def numeric_features(df: pd.DataFrame) -> tuple[np.ndarray, list[str]]:
     skip = {
         "trial_id",
@@ -135,6 +171,46 @@ def numeric_features(df: pd.DataFrame) -> tuple[np.ndarray, list[str]]:
     cols = [c for c in df.columns if c not in skip]
     numeric = df[cols].apply(pd.to_numeric, errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0)
     return numeric.to_numpy(dtype=np.float32), list(numeric.columns)
+
+
+def has_usable_feature_columns(matrix: np.ndarray) -> bool:
+    matrix = np.asarray(matrix)
+    return bool(matrix.ndim == 2 and matrix.shape[1] > 0)
+
+
+def read_csv_if_exists(path: Path | None) -> pd.DataFrame:
+    if path is None or not path.exists():
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(path)
+    except Exception:
+        return pd.DataFrame()
+
+
+def slice_feature_names(path: Path | None, n_features: int) -> list[str]:
+    columns = read_csv_if_exists(path)
+    if "feature_name" in columns.columns and len(columns) == n_features:
+        return columns["feature_name"].astype(str).tolist()
+    return [f"slice_feature_{i + 1}" for i in range(n_features)]
+
+
+def selected_matrix(trial: TrialInput, feature_df: pd.DataFrame, args: argparse.Namespace) -> tuple[np.ndarray, list[str], str]:
+    source = args.embedding_source
+    if source == "slices" and trial.slice_matrix_path and trial.slice_matrix_path.exists():
+        matrix = np.load(trial.slice_matrix_path, allow_pickle=True).astype(np.float32, copy=False)
+        if has_usable_feature_columns(matrix):
+            return np.nan_to_num(matrix, nan=0.0).astype(np.float32), slice_feature_names(trial.slice_columns_path, matrix.shape[1]), "slices"
+    if source == "traces" and trial.trace_matrix_path and trial.trace_matrix_path.exists():
+        matrix = np.load(trial.trace_matrix_path, allow_pickle=True).astype(np.float32, copy=False)
+        if has_usable_feature_columns(matrix):
+            return np.nan_to_num(matrix, nan=0.0).astype(np.float32), [f"frame_{i + 1}" for i in range(matrix.shape[1])], "traces"
+    if source == "responses" and trial.response_matrix_path and trial.response_matrix_path.exists():
+        matrix = np.load(trial.response_matrix_path, allow_pickle=True).astype(np.float32, copy=False)
+        if has_usable_feature_columns(matrix):
+            return np.nan_to_num(matrix, nan=0.0).astype(np.float32), [f"response_{i + 1}" for i in range(matrix.shape[1])], "responses"
+    matrix, feature_names = numeric_features(feature_df)
+    fallback = "features" if source == "features" else "features_fallback"
+    return matrix, feature_names, fallback
 
 
 def attach_labels(embedding: pd.DataFrame, feature_df: pd.DataFrame, cluster_path: Path | None) -> pd.DataFrame:
@@ -191,19 +267,40 @@ def run_optional_umap(matrix: np.ndarray, n_neighbors: int, min_dist: float) -> 
     except Exception as exc:
         return None, f"umap skipped: {exc}"
     reducer = umap.UMAP(n_neighbors=min(n_neighbors, max(2, matrix.shape[0] - 1)), min_dist=min_dist, random_state=0)
-    return reducer.fit_transform(matrix), None
+    try:
+        return reducer.fit_transform(matrix), None
+    except Exception as exc:
+        return None, f"umap skipped: {exc}"
 
 
 def process_trial(trial: TrialInput, out_dir: Path, args: argparse.Namespace) -> tuple[str, dict]:
     from sklearn.decomposition import PCA
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    feature_df = pd.read_csv(trial.feature_matrix_path)
-    matrix, feature_names = numeric_features(feature_df)
+    feature_df = pd.read_csv(trial.feature_matrix_path) if trial.feature_matrix_path.exists() else pd.read_csv(trial.z_feature_matrix_path)
+    matrix, feature_names, embedding_source = selected_matrix(trial, feature_df, args)
+    matrix = np.asarray(matrix, dtype=np.float32)
+    if matrix.ndim != 2:
+        raise TrialSkipError("Embedding matrix is not two-dimensional.")
     if matrix.shape[0] < 2:
-        raise ValueError("Need at least 2 ROI for dimensionality reduction")
+        raise TrialSkipError("Need at least 2 ROI for dimensionality reduction.")
+    if matrix.shape[1] < 1:
+        raise TrialSkipError("Need at least 1 feature for dimensionality reduction.")
+    keep_rows = np.all(np.isfinite(matrix), axis=1)
+    if int(np.count_nonzero(keep_rows)) < 2:
+        raise TrialSkipError("Not enough finite ROI rows for dimensionality reduction.")
+    if int(np.count_nonzero(keep_rows)) != len(keep_rows):
+        LOGGER.info(
+            "[skip-roi] %s dropped %d non-finite ROI row(s) before embedding.",
+            trial.trial_id,
+            int(len(keep_rows) - np.count_nonzero(keep_rows)),
+        )
+    matrix = matrix[keep_rows]
+    feature_df = feature_df.loc[keep_rows].reset_index(drop=True)
 
     n_components = min(args.pca_components, matrix.shape[0], matrix.shape[1])
+    if n_components < 1:
+        raise TrialSkipError("No usable embedding components remain after filtering.")
     pca = PCA(n_components=n_components, random_state=0)
     embedding = pca.fit_transform(matrix)
     pca_table = pd.DataFrame({f"PC{i + 1}": embedding[:, i] for i in range(n_components)})
@@ -233,8 +330,11 @@ def process_trial(trial: TrialInput, out_dir: Path, args: argparse.Namespace) ->
     summary = {
         "trial_id": trial.trial_id,
         "status": "ok",
+        "n_roi_input": int(len(keep_rows)),
         "n_roi": int(matrix.shape[0]),
+        "n_roi_dropped_before_embedding": int(len(keep_rows) - np.count_nonzero(keep_rows)),
         "n_features": int(matrix.shape[1]),
+        "embedding_source": embedding_source,
         "pca_components": int(n_components),
         "umap_status": umap_status,
         "feature_names": feature_names,
@@ -246,10 +346,12 @@ def process_trial(trial: TrialInput, out_dir: Path, args: argparse.Namespace) ->
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run PCA and optional UMAP on ROI features.")
     parser.add_argument("--data-root", type=Path, required=True)
-    parser.add_argument("--input-root", type=Path, help="Step-10 root. Default: OUTPUT_ROOT/10_population_features.")
+    parser.add_argument("--input-root", type=Path, help="Step-11 root. Default: OUTPUT_ROOT/11_population_features.")
+    parser.add_argument("--slice-root", type=Path, help="Step-12 root. Default: OUTPUT_ROOT/12_stimulus_slice_features.")
     parser.add_argument("--output-root", type=Path, help="Pipeline output root. Default: DATA_ROOT.")
     parser.add_argument("--action", choices=("skip", "overwrite"), default="skip")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--embedding-source", choices=("slices", "features", "responses", "traces"), default="slices")
     parser.add_argument("--pca-components", type=int, default=5)
     parser.add_argument("--run-umap", action="store_true")
     parser.add_argument("--umap-neighbors", type=int, default=15)
@@ -266,14 +368,19 @@ def main(argv: list[str] | None = None) -> int:
     data_root = args.data_root.expanduser().resolve()
     output_root = args.output_root.expanduser().resolve() if args.output_root else default_output_root(data_root).resolve()
     input_root = args.input_root.expanduser().resolve() if args.input_root else default_input_root(output_root).resolve()
+    slice_root = args.slice_root.expanduser().resolve() if args.slice_root else default_slice_root(output_root).resolve()
     out_root = step_output_root(output_root)
     if not input_root.exists():
         LOGGER.error("Input root does not exist: %s", input_root)
         return 1
-    trials = discover_trials(output_root, input_root)
+    trials = discover_trials(output_root, input_root, slice_root)
+    excluded_trial_ids = load_excluded_trial_ids(output_root)
+    if excluded_trial_ids:
+        trials = [trial for trial in trials if trial.trial_id not in excluded_trial_ids]
     summary = RunSummary(found=len(trials))
     rows = []
     LOGGER.info("Input root : %s", input_root)
+    LOGGER.info("Slice root : %s", slice_root)
     LOGGER.info("Output root: %s", out_root)
     LOGGER.info("Found %d trial(s).", len(trials))
     for trial in trials:
@@ -289,14 +396,21 @@ def main(argv: list[str] | None = None) -> int:
         if args.action == "overwrite":
             clean_step_outputs(out_dir)
         try:
-            _, row = process_trial(trial, out_dir, args)
-            rows.append(row)
-            summary.processed += 1
-            LOGGER.info("[ok] %s: n_roi=%s", trial.trial_id, row.get("n_roi"))
+            status, row = process_trial(trial, out_dir, args)
+        except TrialSkipError as exc:
+            status, row = write_skipped_outputs(trial, out_dir, str(exc))
         except Exception as exc:
             summary.failed += 1
             rows.append({"trial_id": trial.trial_id, "status": "failed", "message": str(exc)})
             LOGGER.exception("[failed] %s: %s", trial.trial_id, exc)
+            continue
+        rows.append(row)
+        if status == "skipped":
+            summary.skipped += 1
+            LOGGER.info("[skip] %s: %s", trial.trial_id, row.get("reason", "no valid embedding matrix"))
+        else:
+            summary.processed += 1
+            LOGGER.info("[ok] %s: n_roi=%s", trial.trial_id, row.get("n_roi"))
     if rows:
         out_root.mkdir(parents=True, exist_ok=True)
         pd.DataFrame(rows).to_csv(out_root / "embedding_summary.csv", index=False)

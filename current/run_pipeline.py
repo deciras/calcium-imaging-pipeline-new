@@ -60,8 +60,10 @@ class PipelineStep:
     accepts_trace_options: bool = False
     accepts_similarity_options: bool = False
     accepts_clustering_options: bool = False
+    accepts_embedding_options: bool = False
     accepts_leiden_options: bool = False
     accepts_roi_gui_options: bool = False
+    accepts_qc_plot_options: bool = False
     accepts_trial_id: bool = False
 
 
@@ -69,7 +71,7 @@ class PipelineStep:
 PIPELINE_STEPS: tuple[PipelineStep, ...] = (
     PipelineStep(
         step_id="00",
-        name="organize OIR files",
+        name="整理 OIR 原始文件",
         script="preprocess/00_oir_file_manager.py",
         accepts_data_root=True,
         accepts_layout=True,
@@ -78,7 +80,7 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
     ),
     PipelineStep(
         step_id="01",
-        name="Fiji OIR to TIF",
+        name="Fiji 将 OIR 转为 TIF",
         script="preprocess/01_fiji_totif_ini.py",
         env="fiji_env",
         accepts_data_root=True,
@@ -92,7 +94,7 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
     ),
     PipelineStep(
         step_id="02",
-        name="generate stimulus map",
+        name="生成刺激映射",
         script="preprocess/02_generate_stim_map.py",
         env="caiman",
         accepts_data_root=True,
@@ -105,7 +107,7 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
     ),
     PipelineStep(
         step_id="03",
-        name="CaImAn motion correction",
+        name="CaImAn 运动校正",
         script="preprocess/03_motion_correct_func_caiman.py",
         env="caiman",
         accepts_data_root=True,
@@ -115,7 +117,7 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
     ),
     PipelineStep(
         step_id="04",
-        name="spatial high-pass",
+        name="空间高通滤波",
         script="preprocess/04_spatial_highpass.py",
         env="caiman",
         accepts_data_root=True,
@@ -128,7 +130,7 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
     ),
     PipelineStep(
         step_id="05",
-        name="suite2p ROI detection",
+        name="suite2p ROI 检测",
         script="roi/05_suite2p_roi_detection_schema_aligned_connected.py",
         env="suite2p",
         accepts_data_root=True,
@@ -139,7 +141,7 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
     ),
     PipelineStep(
         step_id="cellpose",
-        name="cellpose ROI segmentation",
+        name="Cellpose ROI 分割",
         script="roi/05_cellpose_roi_segmentation.py",
         env="czi_cellpose",
         accepts_data_root=True,
@@ -150,7 +152,7 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
     ),
     PipelineStep(
         step_id="manual",
-        name="manual ROI curation GUI",
+        name="手动 ROI 筛选界面",
         script="roi/05_manual_roi_curation_gui.py",
         env="caiman",
         accepts_data_root=True,
@@ -159,21 +161,22 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
     ),
     PipelineStep(
         step_id="06",
-        name="extract dF/F",
+        name="提取 dF/F",
         script="analysis/06_extract_dff.py",
-        env="caiman",
+        env="postmanual_analysis",
         accepts_data_root=True,
         accepts_action=True,
         accepts_step_dry_run=True,
         accepts_output_root=True,
         accepts_dff_options=True,
+        accepts_qc_plot_options=True,
         accepts_trial_id=True,
     ),
     PipelineStep(
         step_id="07",
-        name="detect calcium events",
+        name="检测钙事件",
         script="analysis/07_detect_events.py",
-        env="caiman",
+        env="postmanual_analysis",
         accepts_data_root=True,
         accepts_action=True,
         accepts_step_dry_run=True,
@@ -183,9 +186,9 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
     ),
     PipelineStep(
         step_id="08",
-        name="stimulus response analysis",
+        name="刺激响应分析",
         script="analysis/08_stim_response_analysis.py",
-        env="caiman",
+        env="postmanual_analysis",
         accepts_data_root=True,
         accepts_action=True,
         accepts_step_dry_run=True,
@@ -195,9 +198,9 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
     ),
     PipelineStep(
         step_id="09",
-        name="angle tuning analysis",
+        name="偏振角调谐分析",
         script="analysis/09_angle_tuning_analysis.py",
-        env="caiman",
+        env="postmanual_analysis",
         accepts_data_root=True,
         accepts_action=True,
         accepts_step_dry_run=True,
@@ -206,10 +209,10 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
         accepts_trial_id=True,
     ),
     PipelineStep(
-        step_id="trace",
-        name="plot ROI traces",
+        step_id="10",
+        name="绘制 ROI 曲线",
         script="analysis/10_trace_plots.py",
-        env="caiman",
+        env="postmanual_analysis",
         accepts_data_root=True,
         accepts_action=True,
         accepts_step_dry_run=True,
@@ -218,10 +221,10 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
         accepts_trial_id=True,
     ),
     PipelineStep(
-        step_id="10",
-        name="population features",
-        script="analysis/10_population_features.py",
-        env="caiman",
+        step_id="11",
+        name="群体特征提取",
+        script="analysis/11_population_features.py",
+        env="postmanual_analysis",
         accepts_data_root=True,
         accepts_action=True,
         accepts_step_dry_run=True,
@@ -229,10 +232,21 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
         accepts_trial_id=True,
     ),
     PipelineStep(
-        step_id="11",
-        name="population similarity",
-        script="analysis/11_population_similarity.py",
-        env="caiman",
+        step_id="12",
+        name="刺激切片特征提取",
+        script="analysis/12_stimulus_slice_features.py",
+        env="postmanual_analysis",
+        accepts_data_root=True,
+        accepts_action=True,
+        accepts_step_dry_run=True,
+        accepts_output_root=True,
+        accepts_trial_id=True,
+    ),
+    PipelineStep(
+        step_id="13",
+        name="群体相似性分析",
+        script="analysis/13_population_similarity.py",
+        env="postmanual_analysis",
         accepts_data_root=True,
         accepts_action=True,
         accepts_step_dry_run=True,
@@ -240,10 +254,10 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
         accepts_similarity_options=True,
     ),
     PipelineStep(
-        step_id="12",
-        name="hierarchical clustering",
-        script="analysis/12_hierarchical_clustering.py",
-        env="caiman",
+        step_id="14",
+        name="层次聚类",
+        script="analysis/14_hierarchical_clustering.py",
+        env="postmanual_analysis",
         accepts_data_root=True,
         accepts_action=True,
         accepts_step_dry_run=True,
@@ -252,41 +266,43 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
         accepts_trial_id=True,
     ),
     PipelineStep(
-        step_id="13",
-        name="Leiden community detection",
-        script="analysis/13_leiden_community_detection.py",
-        env="caiman",
+        step_id="15",
+        name="Leiden 社区检测",
+        script="analysis/15_leiden_community_detection.py",
+        env="postmanual_analysis",
         accepts_data_root=True,
         accepts_action=True,
         accepts_step_dry_run=True,
         accepts_output_root=True,
         accepts_leiden_options=True,
-    ),
-    PipelineStep(
-        step_id="14",
-        name="dimensionality reduction",
-        script="analysis/14_dimensionality_reduction.py",
-        env="caiman",
-        accepts_data_root=True,
-        accepts_action=True,
-        accepts_step_dry_run=True,
-        accepts_output_root=True,
-    ),
-    PipelineStep(
-        step_id="15",
-        name="cross-trial summary",
-        script="analysis/15_cross_trial_summary.py",
-        env="caiman",
-        accepts_data_root=True,
-        accepts_action=True,
-        accepts_step_dry_run=True,
-        accepts_output_root=True,
+        accepts_trial_id=True,
     ),
     PipelineStep(
         step_id="16",
-        name="report generation",
-        script="analysis/16_report_generator.py",
-        env="caiman",
+        name="降维分析",
+        script="analysis/16_dimensionality_reduction.py",
+        env="postmanual_analysis",
+        accepts_data_root=True,
+        accepts_action=True,
+        accepts_step_dry_run=True,
+        accepts_output_root=True,
+        accepts_embedding_options=True,
+    ),
+    PipelineStep(
+        step_id="17",
+        name="跨 trial 汇总",
+        script="analysis/17_cross_trial_summary.py",
+        env="postmanual_analysis",
+        accepts_data_root=True,
+        accepts_action=True,
+        accepts_step_dry_run=True,
+        accepts_output_root=True,
+    ),
+    PipelineStep(
+        step_id="18",
+        name="生成报告",
+        script="analysis/18_report_generator.py",
+        env="postmanual_analysis",
         accepts_data_root=True,
         accepts_action=True,
         accepts_step_dry_run=True,
@@ -375,12 +391,12 @@ def parse_step_selector(raw_selector: str | None) -> set[str] | None:
         "basic-analysis": {"06", "07", "08", "09"},
         "basicanalysis": {"06", "07", "08", "09"},
         "basic": {"06", "07", "08", "09"},
-        "core-analysis": {"06", "08", "09", "trace", "10", "12"},
-        "core": {"06", "08", "09", "trace", "10", "12"},
-        "tuning-analysis": {"06", "08", "09", "trace", "10", "12"},
-        "postmanual": {"06", "07", "08", "09", "trace", "10", "11", "12", "13", "14", "15", "16"},
-        "post-manual": {"06", "07", "08", "09", "trace", "10", "11", "12", "13", "14", "15", "16"},
-        "after-manual": {"06", "07", "08", "09", "trace", "10", "11", "12", "13", "14", "15", "16"},
+        "core-analysis": {"06", "08", "09", "10", "11", "12", "13", "14"},
+        "core": {"06", "08", "09", "10", "11", "12", "13", "14"},
+        "tuning-analysis": {"06", "08", "09", "10", "11", "12", "13", "14"},
+        "postmanual": {"06", "07", "08", "09", "10", "11", "12", "13", "14", "15", "16", "17", "18"},
+        "post-manual": {"06", "07", "08", "09", "10", "11", "12", "13", "14", "15", "16", "17", "18"},
+        "after-manual": {"06", "07", "08", "09", "10", "11", "12", "13", "14", "15", "16", "17", "18"},
         "manual-curation": {"manual"},
     }
     expanded: set[str] = set()
@@ -517,10 +533,16 @@ def build_managed_step_args(
     min_corr: float | None,
     knn: int | None,
     cluster_source: str | None,
+    cluster_normalization: str | None,
     linkage_method: str | None,
     distance_metric: str | None,
     n_clusters: int | None,
+    embedding_source: str | None,
     leiden_resolution: float | None,
+    plot_level: str | None,
+    plot_format: str | None,
+    plot_dpi: int | None,
+    refresh_plots: bool,
 ) -> list[str]:
     """
     Build arguments understood by known step scripts.
@@ -679,6 +701,7 @@ def build_managed_step_args(
     if step.accepts_clustering_options:
         clustering_options = (
             ("--cluster-source", cluster_source),
+            ("--cluster-normalization", cluster_normalization),
             ("--linkage-method", linkage_method),
             ("--distance-metric", distance_metric),
             ("--n-clusters", n_clusters),
@@ -687,8 +710,23 @@ def build_managed_step_args(
             if option_value is not None:
                 managed_args.extend([option_name, str(option_value)])
 
+    if step.accepts_embedding_options and embedding_source is not None:
+        managed_args.extend(["--embedding-source", embedding_source])
+
     if step.accepts_leiden_options and leiden_resolution is not None:
         managed_args.extend(["--resolution", str(leiden_resolution)])
+
+    if step.accepts_qc_plot_options:
+        qc_plot_options = (
+            ("--plot-level", plot_level),
+            ("--plot-format", plot_format),
+            ("--plot-dpi", plot_dpi),
+        )
+        for option_name, option_value in qc_plot_options:
+            if option_value is not None:
+                managed_args.extend([option_name, str(option_value)])
+        if refresh_plots:
+            managed_args.append("--refresh-plots")
 
     return managed_args
 
@@ -734,7 +772,7 @@ def check_conda_available(steps: list[PipelineStep], conda_bin: str) -> None:
             "--conda-bin /path/to/conda."
         )
 
-    LOGGER.info("Using conda: %s", conda_path)
+    LOGGER.info("使用 conda：%s", conda_path)
 
 
 def resolve_steps(
@@ -799,10 +837,16 @@ def resolve_steps(
     min_corr: float | None,
     knn: int | None,
     cluster_source: str | None,
+    cluster_normalization: str | None,
     linkage_method: str | None,
     distance_metric: str | None,
     n_clusters: int | None,
+    embedding_source: str | None,
     leiden_resolution: float | None,
+    plot_level: str | None,
+    plot_format: str | None,
+    plot_dpi: int | None,
+    refresh_plots: bool,
     passthrough_args: list[str],
 ) -> list[ResolvedStep]:
     """Check code directory and script files before launching anything."""
@@ -888,10 +932,16 @@ def resolve_steps(
             min_corr=min_corr,
             knn=knn,
             cluster_source=cluster_source,
+            cluster_normalization=cluster_normalization,
             linkage_method=linkage_method,
             distance_metric=distance_metric,
             n_clusters=n_clusters,
+            embedding_source=embedding_source,
             leiden_resolution=leiden_resolution,
+            plot_level=plot_level,
+            plot_format=plot_format,
+            plot_dpi=plot_dpi,
+            refresh_plots=refresh_plots,
         )
         command = build_command(
             script_path=script_path,
@@ -906,7 +956,7 @@ def resolve_steps(
 
 
 def print_step_table(steps: list[PipelineStep]) -> None:
-    LOGGER.info("Available steps:")
+    LOGGER.info("可用步骤：")
     for step in steps:
         env_label = normalize_env_name(step.env) or "current"
         LOGGER.info(
@@ -919,9 +969,9 @@ def print_step_table(steps: list[PipelineStep]) -> None:
 
 
 def print_plan(code_dir: Path, steps: list[ResolvedStep], dry_run: bool) -> None:
-    LOGGER.info("Code directory: %s", code_dir.expanduser().resolve())
-    LOGGER.info("Launcher mode: %s", "plan only" if dry_run else "run commands")
-    LOGGER.info("Selected steps:")
+    LOGGER.info("代码目录：%s", code_dir.expanduser().resolve())
+    LOGGER.info("启动器模式：%s", "仅展示计划" if dry_run else "执行命令")
+    LOGGER.info("已选择步骤：")
     for index, step in enumerate(steps, start=1):
         env_label = normalize_env_name(step.config.env) or "current"
         LOGGER.info(
@@ -931,19 +981,19 @@ def print_plan(code_dir: Path, steps: list[ResolvedStep], dry_run: bool) -> None
             env_label,
             step.config.name,
         )
-        LOGGER.info("     script: %s", step.script_path)
-        LOGGER.info("     command: %s", subprocess.list2cmdline(step.command))
+        LOGGER.info("     脚本：%s", step.script_path)
+        LOGGER.info("     命令：%s", subprocess.list2cmdline(step.command))
 
 
 def run_step(step: ResolvedStep) -> bool:
     """Run one selected pipeline step."""
     step_label = f"{step.config.step_id} {step.config.name}"
-    banner(f"Starting step {step_label}")
+    banner(f"开始步骤 {step_label}")
     start_time = time.time()
 
-    LOGGER.info("Script: %s", step.script_path)
-    LOGGER.info("Working directory: %s", step.script_path.parent)
-    LOGGER.info("Command: %s", subprocess.list2cmdline(step.command))
+    LOGGER.info("脚本：%s", step.script_path)
+    LOGGER.info("工作目录：%s", step.script_path.parent)
+    LOGGER.info("命令：%s", subprocess.list2cmdline(step.command))
 
     child_env = os.environ.copy()
     tmp_root = Path(child_env.get("TMPDIR") or tempfile.gettempdir()).expanduser()
@@ -965,7 +1015,7 @@ def run_step(step: ResolvedStep) -> bool:
         )
         return_code = process.wait()
     except KeyboardInterrupt:
-        LOGGER.error("Interrupted by user while running step %s.", step_label)
+        LOGGER.error("运行步骤 %s 时被用户中断。", step_label)
         raise
     except OSError as exc:
         LOGGER.exception("Could not start step %s: %s", step_label, exc)
@@ -973,11 +1023,11 @@ def run_step(step: ResolvedStep) -> bool:
 
     elapsed = time.time() - start_time
     if return_code == 0:
-        LOGGER.info("Step %s finished successfully in %.2f seconds.", step_label, elapsed)
+        LOGGER.info("步骤 %s 成功完成，耗时 %.2f 秒。", step_label, elapsed)
         return True
 
     LOGGER.error(
-        "Step %s failed with exit code %s after %.2f seconds.",
+        "步骤 %s 失败，退出代码 %s，耗时 %.2f 秒。",
         step_label,
         return_code,
         elapsed,
@@ -1194,14 +1244,34 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--trace-max-rois", type=int, default=None, help="Trace step: maximum individual ROI trace PNGs to write; 0 means all.")
     parser.add_argument("--trace-scale", choices=("dff", "normalized", "both"), default=None, help="Trace step: write raw dF/F plots, normalized plots, or both.")
     parser.add_argument("--y-axis-mode", choices=("full", "robust"), default=None, help="Trace step: full dynamic y-axis per ROI, or robust clipped display.")
-    parser.add_argument("--similarity-source", choices=("traces", "responses", "features"), default=None, help="Step 11: source for edge graph and heatmap.")
-    parser.add_argument("--min-corr", type=float, default=None, help="Step 11: minimum similarity for graph edges.")
-    parser.add_argument("--knn", type=int, default=None, help="Step 11: maximum neighbors per ROI.")
-    parser.add_argument("--cluster-source", choices=("angle", "features", "traces"), default=None, help="Step 12: data source for hierarchical clustering.")
-    parser.add_argument("--linkage-method", choices=("ward", "average", "complete"), default=None, help="Step 12: hierarchical linkage method.")
-    parser.add_argument("--distance-metric", choices=("euclidean", "correlation", "cosine"), default=None, help="Step 12: distance metric.")
-    parser.add_argument("--n-clusters", type=int, default=None, help="Step 12: number of hierarchical clusters.")
-    parser.add_argument("--leiden-resolution", type=float, default=None, help="Step 13: Leiden resolution parameter.")
+    parser.add_argument("--similarity-source", choices=("slices", "traces", "responses", "features"), default=None, help="Step 13: source for edge graph and heatmap.")
+    parser.add_argument("--min-corr", type=float, default=None, help="Step 13: minimum similarity for graph edges.")
+    parser.add_argument("--knn", type=int, default=None, help="Step 13: maximum neighbors per ROI.")
+    parser.add_argument("--cluster-source", choices=("slices", "angle", "features", "responses", "traces"), default=None, help="Step 14: data source for hierarchical clustering.")
+    parser.add_argument("--cluster-normalization", choices=("normalized", "raw", "both"), default=None, help="Step 14: cluster normalized data, raw data, or both.")
+    parser.add_argument("--linkage-method", choices=("ward", "average", "complete"), default=None, help="Step 14: hierarchical linkage method.")
+    parser.add_argument("--distance-metric", choices=("euclidean", "correlation", "cosine"), default=None, help="Step 14: distance metric.")
+    parser.add_argument("--n-clusters", type=int, default=None, help="Step 14: number of hierarchical clusters.")
+    parser.add_argument("--embedding-source", choices=("slices", "features", "responses", "traces"), default=None, help="Step 16: data source for PCA/UMAP embedding.")
+    parser.add_argument("--leiden-resolution", type=float, default=None, help="Step 15: Leiden resolution parameter.")
+    parser.add_argument(
+        "--plot-level",
+        choices=("none", "basic", "full"),
+        default=None,
+        help="QC figures for steps that support them. Currently wired for step 06.",
+    )
+    parser.add_argument(
+        "--plot-format",
+        choices=("png", "pdf", "both"),
+        default=None,
+        help="Step 06+ QC figures: output image format. Default is step-specific, usually both.",
+    )
+    parser.add_argument("--plot-dpi", type=int, default=None, help="QC figure DPI for steps that support plot options.")
+    parser.add_argument(
+        "--refresh-plots",
+        action="store_true",
+        help="Rebuild plots from existing numeric outputs when the selected step supports it. Currently wired for step 06.",
+    )
     parser.add_argument(
         "--list-steps",
         action="store_true",
@@ -1330,21 +1400,27 @@ def main(argv: list[str] | None = None) -> int:
             min_corr=args.min_corr,
             knn=args.knn,
             cluster_source=args.cluster_source,
+            cluster_normalization=args.cluster_normalization,
             linkage_method=args.linkage_method,
             distance_metric=args.distance_metric,
             n_clusters=args.n_clusters,
+            embedding_source=args.embedding_source,
             leiden_resolution=args.leiden_resolution,
+            plot_level=args.plot_level,
+            plot_format=args.plot_format,
+            plot_dpi=args.plot_dpi,
+            refresh_plots=args.refresh_plots,
             passthrough_args=passthrough_args,
         )
     except Exception as exc:
-        LOGGER.error("Configuration error: %s", exc)
+        LOGGER.error("配置错误：%s", exc)
         return 1
 
     banner("Calcium imaging pipeline launcher")
     print_plan(args.code_dir, resolved_steps, args.dry_run)
 
     if args.dry_run:
-        LOGGER.info("Dry-run complete. No step scripts were launched.")
+        LOGGER.info("dry-run 完成，未启动任何步骤脚本。")
         return 0
 
     total_start = time.time()
@@ -1360,17 +1436,17 @@ def main(argv: list[str] | None = None) -> int:
 
         failed.append(label)
         if not args.continue_on_failure:
-            LOGGER.error("Stopping because this step failed: %s", label)
+            LOGGER.error("由于该步骤失败，停止后续执行：%s", label)
             break
 
     total_elapsed = time.time() - total_start
     banner("Pipeline summary", "#")
-    LOGGER.info("Succeeded: %d/%d", len(succeeded), len(resolved_steps))
+    LOGGER.info("成功步骤：%d/%d", len(succeeded), len(resolved_steps))
     if succeeded:
-        LOGGER.info("Successful steps: %s", ", ".join(succeeded))
+        LOGGER.info("成功的步骤：%s", ", ".join(succeeded))
     if failed:
-        LOGGER.error("Failed steps: %s", ", ".join(failed))
-    LOGGER.info("Total launcher time: %.2f minutes", total_elapsed / 60.0)
+        LOGGER.error("失败的步骤：%s", ", ".join(failed))
+    LOGGER.info("启动器总耗时：%.2f 分钟", total_elapsed / 60.0)
 
     return 1 if failed else 0
 
