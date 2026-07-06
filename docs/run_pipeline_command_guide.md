@@ -3,7 +3,7 @@
 这份文件只写当前推荐主线。日常运行时，先进入代码库：
 
 ```bash
-cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipeline-new
+cd /absolute/path/to/calcium-imaging-pipeline-new
 ```
 
 最常用格式：
@@ -17,10 +17,10 @@ python3 current/run_pipeline.py \
 
 `--action skip` 是安全模式：已有结果就跳过，不会覆盖。只有确认要重算某一步时，再用 `--action overwrite`。
 
-当前测试数据集路径：
+示例数据路径请替换成你自己的绝对路径，例如：
 
 ```text
-/Volumes/Yifei_Ding/20260617_test
+/absolute/path/to/DATA_ROOT
 ```
 
 本地和工作站的数据根目录都按同一套规则放置：`00_original_files/` 存显微镜原始数据，`00_stim_logs_raw/` 存刺激控制程序导出的原始参数合集。`stim_logs/` 如果存在，只是旧步骤兼容用的 flat index。
@@ -52,22 +52,22 @@ python3 current/run_pipeline.py \
 ## 一次跑自动前半段
 
 ```bash
-cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipeline-new
+cd /absolute/path/to/calcium-imaging-pipeline-new
 
 python3 current/run_pipeline.py \
   --steps premanual \
-  --data-root /Volumes/Yifei_Ding/20260617_test \
+  --data-root /absolute/path/to/DATA_ROOT \
   --action skip
 ```
 
 如果只想看看会运行什么，不真正运行：
 
 ```bash
-cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipeline-new
+cd /absolute/path/to/calcium-imaging-pipeline-new
 
 python3 current/run_pipeline.py \
   --steps premanual \
-  --data-root /Volumes/Yifei_Ding/20260617_test \
+  --data-root /absolute/path/to/DATA_ROOT \
   --dry-run
 ```
 
@@ -76,21 +76,21 @@ python3 current/run_pipeline.py \
 打开文件选择界面：
 
 ```bash
-cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipeline-new
+cd /absolute/path/to/calcium-imaging-pipeline-new
 
 python3 current/run_pipeline.py \
   --steps manual \
-  --data-root /Volumes/Yifei_Ding/20260617_test
+  --data-root /absolute/path/to/DATA_ROOT
 ```
 
 直接打开某个 trial：
 
 ```bash
-cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipeline-new
+cd /absolute/path/to/calcium-imaging-pipeline-new
 
 python3 current/run_pipeline.py \
   --steps manual \
-  --data-root /Volumes/Yifei_Ding/20260617_test \
+  --data-root /absolute/path/to/DATA_ROOT \
   --trial-id 20260428_Euprymna_retina2_25x
 ```
 
@@ -105,33 +105,33 @@ GUI 里可以切换显示底片：
 ## 一次跑自动后半段
 
 ```bash
-cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipeline-new
+cd /absolute/path/to/calcium-imaging-pipeline-new
 
 python3 current/run_pipeline.py \
   --steps postmanual \
-  --data-root /Volumes/Yifei_Ding/20260617_test \
+  --data-root /absolute/path/to/DATA_ROOT \
   --action skip
 ```
 
 如果只想先看计划：
 
 ```bash
-cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipeline-new
+cd /absolute/path/to/calcium-imaging-pipeline-new
 
 python3 current/run_pipeline.py \
   --steps postmanual \
-  --data-root /Volumes/Yifei_Ding/20260617_test \
+  --data-root /absolute/path/to/DATA_ROOT \
   --dry-run
 ```
 
 后半段的推荐功能聚类入口是 stimulus slices：
 
 ```bash
-cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipeline-new
+cd /absolute/path/to/calcium-imaging-pipeline-new
 
 python3 current/run_pipeline.py \
   --steps postmanual \
-  --data-root /Volumes/Yifei_Ding/20260617_test \
+  --data-root /absolute/path/to/DATA_ROOT \
   --action skip \
   --similarity-source slices \
   --cluster-source slices \
@@ -144,33 +144,33 @@ python3 current/run_pipeline.py \
 例如只跑 02：
 
 ```bash
-cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipeline-new
+cd /absolute/path/to/calcium-imaging-pipeline-new
 
 python3 current/run_pipeline.py \
   --steps 02 \
-  --data-root /Volumes/Yifei_Ding/20260617_test \
+  --data-root /absolute/path/to/DATA_ROOT \
   --action skip
 ```
 
 例如重新跑 05 suite2p：
 
 ```bash
-cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipeline-new
+cd /absolute/path/to/calcium-imaging-pipeline-new
 
 python3 current/run_pipeline.py \
   --steps 05 \
-  --data-root /Volumes/Yifei_Ding/20260617_test \
+  --data-root /absolute/path/to/DATA_ROOT \
   --action overwrite
 ```
 
 例如重新跑 06 dF/F：
 
 ```bash
-cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipeline-new
+cd /absolute/path/to/calcium-imaging-pipeline-new
 
 python3 current/run_pipeline.py \
   --steps 06 \
-  --data-root /Volumes/Yifei_Ding/20260617_test \
+  --data-root /absolute/path/to/DATA_ROOT \
   --action overwrite
 ```
 

@@ -172,6 +172,15 @@ def numeric(series: pd.Series, default: float = np.nan) -> pd.Series:
     return pd.to_numeric(series, errors="coerce").fillna(default)
 
 
+def first_numeric_value(df: pd.DataFrame, column: str, cast=float) -> float | int | float:
+    if df.empty or column not in df:
+        return np.nan
+    values = pd.to_numeric(df[column], errors="coerce").dropna()
+    if values.empty:
+        return np.nan
+    return cast(values.iloc[0])
+
+
 def build_qc_table(output_root: Path) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
     tables: dict[str, pd.DataFrame] = {}
     tables["dff"] = read_csv(output_root / "06_dff" / "dff_summary.csv")
@@ -210,20 +219,20 @@ def build_qc_table(output_root: Path) -> tuple[pd.DataFrame, dict[str, pd.DataFr
         leiden = tables["leiden"][tables["leiden"]["trial_id"].astype(str) == trial_id] if "trial_id" in tables["leiden"] else pd.DataFrame()
         embedding = tables["embedding"][tables["embedding"]["trial_id"].astype(str) == trial_id] if "trial_id" in tables["embedding"] else pd.DataFrame()
 
-        row["n_roi"] = int(dff["n_roi_selected"].iloc[0]) if not dff.empty and "n_roi_selected" in dff else np.nan
-        row["n_frames"] = int(dff["n_frames"].iloc[0]) if not dff.empty and "n_frames" in dff else np.nan
-        row["n_events"] = int(events["n_events"].iloc[0]) if not events.empty and "n_events" in events else np.nan
-        row["mean_event_rate_hz"] = float(events["mean_event_rate_hz"].iloc[0]) if not events.empty and "mean_event_rate_hz" in events else np.nan
-        row["n_stim_events"] = int(stim["n_stim_events"].iloc[0]) if not stim.empty and "n_stim_events" in stim else np.nan
-        row["n_responsive_roi"] = int(stim["n_responsive_roi"].iloc[0]) if not stim.empty and "n_responsive_roi" in stim else np.nan
+        row["n_roi"] = first_numeric_value(dff, "n_roi_selected", int)
+        row["n_frames"] = first_numeric_value(dff, "n_frames", int)
+        row["n_events"] = first_numeric_value(events, "n_events", int)
+        row["mean_event_rate_hz"] = first_numeric_value(events, "mean_event_rate_hz", float)
+        row["n_stim_events"] = first_numeric_value(stim, "n_stim_events", int)
+        row["n_responsive_roi"] = first_numeric_value(stim, "n_responsive_roi", int)
         row["fraction_responsive"] = row["n_responsive_roi"] / row["n_roi"] if row.get("n_roi", 0) else np.nan
-        row["n_slice_responsive_roi"] = int(slices["n_responsive_roi"].iloc[0]) if not slices.empty and "n_responsive_roi" in slices else np.nan
-        row["n_evoked_slices"] = int(slices["n_evoked_slices"].iloc[0]) if not slices.empty and "n_evoked_slices" in slices else np.nan
+        row["n_slice_responsive_roi"] = first_numeric_value(slices, "n_responsive_roi", int)
+        row["n_evoked_slices"] = first_numeric_value(slices, "n_evoked_slices", int)
         row["fraction_slice_responsive"] = row["n_slice_responsive_roi"] / row["n_roi"] if row.get("n_roi", 0) else np.nan
-        row["n_angle_selective_roi"] = int(angle["n_angle_selective_roi"].iloc[0]) if not angle.empty and "n_angle_selective_roi" in angle else np.nan
+        row["n_angle_selective_roi"] = first_numeric_value(angle, "n_angle_selective_roi", int)
         row["fraction_angle_selective"] = row["n_angle_selective_roi"] / row["n_roi"] if row.get("n_roi", 0) else np.nan
-        row["n_hierarchical_clusters"] = int(clusters["n_clusters"].iloc[0]) if not clusters.empty and "n_clusters" in clusters else np.nan
-        row["n_leiden_communities"] = int(leiden["n_communities"].iloc[0]) if not leiden.empty and "n_communities" in leiden else np.nan
+        row["n_hierarchical_clusters"] = first_numeric_value(clusters, "n_clusters", int)
+        row["n_leiden_communities"] = first_numeric_value(leiden, "n_communities", int)
 
         warnings = []
         if row.get("n_roi", 0) == 0:

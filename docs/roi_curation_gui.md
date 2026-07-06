@@ -9,11 +9,11 @@
 ## 打开方式
 
 ```bash
-cd /Users/dingyifei/Documents/calcium-imaging-pipeline-new/calcium-imaging-pipeline-new
+cd /absolute/path/to/calcium-imaging-pipeline-new
 
 python3 current/run_pipeline.py \
   --steps manual \
-  --data-root /Volumes/Yifei_Ding/20260617_test \
+  --data-root /absolute/path/to/DATA_ROOT \
   --trial-id 20260428_Euprymna_retina2_25x \
   --movie-kind corrected
 ```

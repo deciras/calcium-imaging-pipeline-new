@@ -99,7 +99,7 @@ def normalize_existing_mode(mode):
     if mode == "":
         mode = "skip"
     if mode not in VALID_EXISTING_MODES:
-        print("[警告] 未知 existingMode='{}'；将使用 'skip'。".format(mode))
+        print("[WARN] Unknown existingMode='{}'; using 'skip'.".format(mode))
         mode = "skip"
     return mode
 
@@ -115,7 +115,7 @@ def normalize_projection_mode(mode):
     }
     mode = aliases.get(mode, mode)
     if mode not in VALID_PROJECTION_MODES:
-        print("[警告] 未知 projectionMode='{}'；将使用 'auto'。".format(mode))
+        print("[WARN] Unknown projectionMode='{}'; using 'auto'.".format(mode))
         mode = "auto"
     return mode
 
@@ -132,7 +132,7 @@ def normalize_metadata_mode(mode):
     }
     mode = aliases.get(mode, mode)
     if mode not in VALID_METADATA_MODES:
-        print("[警告] 未知 metadataMode='{}'；将使用 'skip'。".format(mode))
+        print("[WARN] Unknown metadataMode='{}'; using 'skip'.".format(mode))
         mode = "skip"
     return mode
 
@@ -150,7 +150,7 @@ def normalize_stim_export_mode(mode):
     }
     mode = aliases.get(mode, mode)
     if mode not in VALID_STIM_EXPORT_MODES:
-        print("[警告] 未知 stimExportMode='{}'；将使用 'projected'。".format(mode))
+        print("[WARN] Unknown stimExportMode='{}'; using 'projected'.".format(mode))
         mode = "projected"
     return mode
 
@@ -360,7 +360,7 @@ def update_metadata_json_from_oir(file_path, output_dir_path, title, metadata_mo
         with open(metadata_path, "r") as handle:
             data = json.load(handle)
     except Exception as e:
-        print("[警告] 无法读取用于刷新 metadata 的 JSON {}：{}".format(metadata_path, e))
+        print("[WARN] Could not read metadata JSON for refresh {}: {}".format(metadata_path, e))
         return "read-failed"
 
     data["source_oir_path"] = str(file_path)
@@ -372,10 +372,10 @@ def update_metadata_json_from_oir(file_path, output_dir_path, title, metadata_mo
     try:
         with open(metadata_path, "w") as handle:
             handle.write(json.dumps(data, indent=4))
-        print("[METADATA] 已更新 acquisition.start_time：{}".format(metadata_path))
+        print("[METADATA] Updated acquisition.start_time: {}".format(metadata_path))
         return "updated"
     except Exception as e:
-        print("[警告] 无法写入刷新后的 metadata JSON {}：{}".format(metadata_path, e))
+        print("[WARN] Could not write refreshed metadata JSON {}: {}".format(metadata_path, e))
         return "write-failed"
 
 
@@ -393,14 +393,14 @@ def clean_step01_outputs(output_dir_path):
             try:
                 if os.path.isfile(p) or os.path.islink(p):
                     os.remove(p)
-                    print("  已删除旧文件 -> " + p)
+                    print("  Removed old file -> " + p)
                     removed += 1
                 elif os.path.isdir(p):
                     shutil.rmtree(p)
-                    print("  已删除旧文件夹 -> " + p)
+                    print("  Removed old directory -> " + p)
                     removed += 1
             except Exception as e:
-                print("  [警告] 删除失败 {}：{}".format(p, e))
+                print("  [WARN] Failed to delete {}: {}".format(p, e))
     return removed
 
 
@@ -430,7 +430,7 @@ def find_oir_creation_datetime(file_path):
                     return match.group(1).strip()
                 overlap = text[-256:]
     except Exception as e:
-        print("[警告] 无法从 {} 读取 OIR creationDateTime：{}".format(file_path, e))
+        print("[WARN] Could not read OIR creationDateTime from {}: {}".format(file_path, e))
 
     return None
 
@@ -455,8 +455,8 @@ def save_metadata_json(imp, output_dir_path, title, source_oir_path, stim_export
     else:
         fps = None
         print(
-            "[警告] '{}' 的 frame_interval=0，metadata 中 fps 将设为 null。"
-            "请检查 Olympus 校准设置。".format(title)
+            "[WARN] '{}' has frame_interval=0; metadata fps will be set to null. "
+            "Please check Olympus calibration.".format(title)
         )
 
     fov_width_um = float(width_px * px_w)
@@ -509,9 +509,9 @@ def save_metadata_json(imp, output_dir_path, title, source_oir_path, stim_export
         json_str = json.dumps(meta_dict, indent=4)
         with open(json_path, "w") as f:
             f.write(json_str)
-        print("已导出 Metadata JSON：" + json_path)
+        print("Exported metadata JSON: " + json_path)
     except Exception as e:
-        print("保存 JSON metadata 失败：" + str(e))
+        print("Failed to save metadata JSON: " + str(e))
 
 
 def copy_calibration(src_imp, dst_imp):
@@ -607,7 +607,7 @@ def save_max_projection_single_channel(imp, output_path, nZ, nT):
 
 def save_channel_z_projection(imp, channel_index, nZ, nT, output_path, projection_mode):
     actual_mode = choose_projection_mode(projection_mode, nZ, nT)
-    print("      通道 {} 的投影模式：{}".format(channel_index, actual_mode))
+    print("      Channel {} projection mode: {}".format(channel_index, actual_mode))
     if actual_mode == "fast":
         save_channel_z_projection_fast(imp, channel_index, nZ, nT, output_path)
     else:
@@ -723,7 +723,7 @@ def should_write_raw_stim(stim_export_mode):
 
 def process_oir(file_path, output_dir_path, projection_mode, stim_export_mode):
     print("-" * 30)
-    print("正在打开（Bio-Formats 虚拟模式）：" + file_path)
+    print("Opening with Bio-Formats virtual mode: " + file_path)
 
     options = ImporterOptions()
     options.setId(file_path)
@@ -743,7 +743,7 @@ def process_oir(file_path, output_dir_path, projection_mode, stim_export_mode):
     try:
         imps = BF.openImagePlus(options)
         if not imps:
-            print("加载失败：" + file_path)
+            print("Load failed: " + file_path)
             return False
 
         imp = imps[0]
@@ -755,7 +755,7 @@ def process_oir(file_path, output_dir_path, projection_mode, stim_export_mode):
         nC = int(imp.getNChannels())
 
         save_metadata_json(imp, output_dir_path, title, file_path, stim_export_mode)
-        print("Metadata：{} 个通道，{} 个 Z 层，{} 个时间点".format(nC, nZ, nT))
+        print("Metadata: {} channel(s), {} Z-slice(s), {} timepoint(s)".format(nC, nZ, nT))
 
         max_proj_path = os.path.join(output_dir_path, title + "_Max_Proj.tif")
         stim_path = os.path.join(output_dir_path, title + "_Stim_Analog.tif")
@@ -763,55 +763,54 @@ def process_oir(file_path, output_dir_path, projection_mode, stim_export_mode):
 
         if nZ > 1:
             if nC == 1:
-                print("正在为单通道计算最大投影...")
+                print("Computing max projection for single-channel input...")
                 save_channel_z_projection(imp, 1, nZ, nT, max_proj_path, projection_mode)
-                print("已保存投影：" + max_proj_path)
+                print("Saved projection: " + max_proj_path)
 
             elif nC == 2:
-                print("正在为各通道计算最大投影...")
+                print("Computing max projections for each channel...")
                 save_channel_z_projection(imp, 1, nZ, nT, max_proj_path, projection_mode)
-                print("已保存通道 1 最大投影：" + max_proj_path)
+                print("Saved channel 1 max projection: " + max_proj_path)
 
                 if should_write_projected_stim(stim_export_mode):
                     save_channel_z_projection(imp, 2, nZ, nT, stim_path, projection_mode)
-                    print("已保存通道 2 刺激模拟信号：" + stim_path)
+                    print("Saved channel 2 stim analog projection: " + stim_path)
                 if should_write_raw_stim(stim_export_mode):
                     save_channel_raw_z_time_series(imp, 2, nZ, nT, stim_raw_path)
-                    print("已保存通道 2 原始刺激模拟信号分层序列：" + stim_raw_path)
+                    print("Saved channel 2 raw stim analog stack: " + stim_raw_path)
 
             else:
                 print(
-                    "[警告] 检测到 {} 个通道（>2）。"
-                    "当前仅导出通道 1 的 Max_Proj 和通道 2 的刺激输出；"
-                    "通道 3 及以上将被忽略。".format(nC)
+                    "[WARN] Detected {} channels (>2). Exporting only channel 1 Max_Proj "
+                    "and channel 2 stim outputs; channels 3+ will be ignored.".format(nC)
                 )
                 save_channel_z_projection(imp, 1, nZ, nT, max_proj_path, projection_mode)
-                print("已保存通道 1 最大投影：" + max_proj_path)
+                print("Saved channel 1 max projection: " + max_proj_path)
 
                 if should_write_projected_stim(stim_export_mode):
                     save_channel_z_projection(imp, 2, nZ, nT, stim_path, projection_mode)
-                    print("已保存通道 2 刺激模拟信号：" + stim_path)
+                    print("Saved channel 2 stim analog projection: " + stim_path)
                 if should_write_raw_stim(stim_export_mode):
                     save_channel_raw_z_time_series(imp, 2, nZ, nT, stim_raw_path)
-                    print("已保存通道 2 原始刺激模拟信号分层序列：" + stim_raw_path)
+                    print("Saved channel 2 raw stim analog stack: " + stim_raw_path)
 
         else:
-            print("仅检测到一个 Z 层，正在分别保存各通道 TIF。")
+            print("Detected a single Z-slice; saving per-channel TIFF files.")
             if nC >= 1:
                 save_single_z_channel(imp, 1, nT, max_proj_path)
-                print("已保存通道 1：" + max_proj_path)
+                print("Saved channel 1 TIFF: " + max_proj_path)
             if nC >= 2:
                 if should_write_projected_stim(stim_export_mode):
                     save_single_z_channel(imp, 2, nT, stim_path)
-                    print("已保存通道 2：" + stim_path)
+                    print("Saved channel 2 TIFF: " + stim_path)
                 if should_write_raw_stim(stim_export_mode):
                     save_channel_raw_z_time_series(imp, 2, nZ, nT, stim_raw_path)
-                    print("已保存通道 2 原始分层序列：" + stim_raw_path)
+                    print("Saved channel 2 raw stack: " + stim_raw_path)
 
         return True
 
     except Exception as e:
-        print("处理失败 " + file_path + "：" + str(e))
+        print("Processing failed for " + file_path + ": " + str(e))
         traceback.print_exc()
         return False
 
@@ -840,19 +839,19 @@ def should_skip_or_prepare(file_path, target_dir, existing_mode, metadata_mode, 
                 title=title_guess,
                 metadata_mode=metadata_mode,
             )
-            print("[跳过] Step 01 输出已存在：{} -> {}".format(title_guess, target_dir))
-            print("[跳过] Metadata 刷新状态：{}".format(metadata_status))
+            print("[SKIP] Step 01 outputs already exist: {} -> {}".format(title_guess, target_dir))
+            print("[SKIP] Metadata refresh status: {}".format(metadata_status))
             return True
-        print("[运行] Step 01 输出缺失或不完整：{}".format(title_guess))
+        print("[RUN] Step 01 outputs are missing or incomplete: {}".format(title_guess))
         return False
 
     if existing_mode == "overwrite":
-        print("[覆盖] 正在清理旧的 Step 01 输出：" + target_dir)
+        print("[OVERWRITE] Cleaning old Step 01 outputs: " + target_dir)
         clean_step01_outputs(target_dir)
         return False
 
     # existing_mode == "keep"
-    print("[保留] 不删除旧输出，直接重新运行：{}".format(title_guess))
+    print("[KEEP] Keeping old outputs and rerunning: {}".format(title_guess))
     return False
 
 
@@ -886,7 +885,10 @@ def infer_output_target(root_path, output_root_path, input_root, oir_filename):
     if trial_dir_name == parent_dir_name or trial_dir_name == os.path.basename(root_path):
         trial_dir_name = sanitize_title_from_filename(oir_filename)
 
-    rel_parent = os.path.relpath(os.path.dirname(input_abs), root_abs)
+    if input_abs == root_abs:
+        rel_parent = "."
+    else:
+        rel_parent = os.path.relpath(os.path.dirname(input_abs), root_abs)
     step_root = os.path.join(output_root_path, "01_oir_to_tif")
     if rel_parent in [".", ""]:
         target_dir = os.path.join(step_root, trial_dir_name.replace(" ", ""))
@@ -908,15 +910,15 @@ def main():
     stim_export_mode = normalize_stim_export_mode(stimExportMode)
 
     print("\n" + "=" * 60)
-    print("01 Fiji OIR 转 TIF worker")
-    print("根路径        : " + root_path)
-    print("输出根目录    : " + output_root_path)
-    print("扩展名        : " + ext)
-    print("线程参数      : " + str(threads) + "（为兼容保留；当前循环仍为串行）")
-    print("已有输出模式  : " + existing_mode)
-    print("投影模式      : " + projection_mode)
-    print("Metadata 模式 : " + metadata_mode)
-    print("刺激导出模式  : " + stim_export_mode)
+    print("01 Fiji OIR to TIF worker")
+    print("Root path        : " + root_path)
+    print("Output root      : " + output_root_path)
+    print("Extension        : " + ext)
+    print("Thread argument  : " + str(threads) + " (kept for compatibility; loop is currently serial)")
+    print("Existing mode    : " + existing_mode)
+    print("Projection mode  : " + projection_mode)
+    print("Metadata mode    : " + metadata_mode)
+    print("Stim export mode : " + stim_export_mode)
     print("=" * 60)
 
     n_found = 0
@@ -967,9 +969,9 @@ def main():
 
                 valid_group, group_status = validate_oir_file_group(file_path)
                 if not valid_group:
-                    print("[警告] 已跳过不完整的 Olympus OIR 文件组：{}".format(file_path))
-                    print("[警告] {}".format(group_status))
-                    print("[警告] 正在清理该不完整 trial 的 Step 01 输出：" + target_dir)
+                    print("[WARN] Skipping incomplete Olympus OIR file group: {}".format(file_path))
+                    print("[WARN] {}".format(group_status))
+                    print("[WARN] Cleaning Step 01 outputs for this incomplete trial: " + target_dir)
                     clean_step01_outputs(target_dir)
                     n_invalid += 1
                     n_skipped += 1
@@ -982,7 +984,7 @@ def main():
                     n_failed += 1
 
             except Exception as e:
-                print("[错误] 文件附近处理失败 {}：{}".format(file_path, e))
+                print("[ERROR] Nearby file processing failed {}: {}".format(file_path, e))
                 traceback.print_exc()
                 n_failed += 1
 
@@ -990,13 +992,13 @@ def main():
                 System.gc()
 
     print("\n" + "=" * 60)
-    print("批处理完成")
-    print("找到      : {}".format(n_found))
-    print("跳过      : {}".format(n_skipped))
-    print("完成      : {}".format(n_done))
-    print("无效输入跳过: {}".format(n_invalid))
-    print("已补 acquisition.start_time 的 metadata 数量: {}".format(n_metadata_updated))
-    print("失败      : {}".format(n_failed))
+    print("Batch complete")
+    print("Found        : {}".format(n_found))
+    print("Skipped      : {}".format(n_skipped))
+    print("Completed    : {}".format(n_done))
+    print("Invalid skip : {}".format(n_invalid))
+    print("Metadata acquisition.start_time updates: {}".format(n_metadata_updated))
+    print("Failed       : {}".format(n_failed))
     print("=" * 60)
 
     return 1 if n_failed else 0
@@ -1005,6 +1007,6 @@ def main():
 try:
     System.exit(main())
 except Exception as main_e:
-    print("主循环错误：" + str(main_e))
+    print("Main loop error: " + str(main_e))
     traceback.print_exc()
     System.exit(1)

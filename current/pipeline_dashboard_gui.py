@@ -156,6 +156,7 @@ class PipelineDashboard(QMainWindow):
         self.n_workers_spin = self.integer_spin(1, 64, int(os.environ.get("N_WORKERS", "1")))
         self.num_threads_spin = self.integer_spin(1, 128, int(os.environ.get("NUM_THREADS", "1")))
         self.trial_id_edit = QLineEdit("")
+        self.date_id_edit = QLineEdit("")
         self.extra_args_edit = QLineEdit("")
 
         self.command_preview = QPlainTextEdit()
@@ -194,6 +195,7 @@ class PipelineDashboard(QMainWindow):
         config_form.addRow("workers", self.n_workers_spin)
         config_form.addRow("threads / worker", self.num_threads_spin)
         config_form.addRow("Trial id", self.trial_id_edit)
+        config_form.addRow("Date id", self.date_id_edit)
         config_form.addRow("Extra args", self.extra_args_edit)
 
         config_box = QGroupBox("Run configuration")
@@ -251,6 +253,7 @@ class PipelineDashboard(QMainWindow):
             self.fiji_bin_edit,
             self.fiji_memory_edit,
             self.trial_id_edit,
+            self.date_id_edit,
             self.extra_args_edit,
         ):
             control.textChanged.connect(self.update_command_preview)
@@ -288,10 +291,30 @@ class PipelineDashboard(QMainWindow):
         configured = os.environ.get("FIJI_BIN") or os.environ.get("FIJI_PATH")
         if configured:
             return configured
+        candidates = []
+        home = Path.home()
         if platform.system() == "Darwin":
-            return "/Applications/Fiji.app"
-        if platform.system() == "Linux":
-            return "/home/yifei/Fiji/fiji-linux-x64"
+            candidates.extend(
+                [
+                    Path("/Applications/Fiji.app"),
+                    home / "Applications" / "Fiji.app",
+                    home / "Fiji.app",
+                ]
+            )
+        elif platform.system() == "Linux":
+            candidates.extend(
+                [
+                    home / "Fiji",
+                    home / "Fiji.app",
+                    Path("/opt/Fiji"),
+                    Path("/opt/Fiji.app"),
+                    Path("/usr/local/Fiji"),
+                    Path("/usr/local/Fiji.app"),
+                ]
+            )
+        for candidate in candidates:
+            if candidate.exists():
+                return str(candidate)
         return ""
 
     @staticmethod
@@ -395,6 +418,9 @@ class PipelineDashboard(QMainWindow):
         trial_id = self.trial_id_edit.text().strip()
         if trial_id:
             args.extend(["--trial-id", trial_id])
+        date_id = self.date_id_edit.text().strip()
+        if date_id:
+            args.extend(["--date-id", date_id])
         extra = self.extra_args_edit.text().strip()
         if extra:
             args.extend(shlex.split(extra))

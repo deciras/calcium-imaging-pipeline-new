@@ -1,0 +1,441 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+<defs>
+<marker id="arrow-main" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L10,5 L0,10 Z" fill="#263B4A"/></marker>
+<marker id="arrow-aux" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,4 L0,8 Z" fill="#718096"/></marker>
+</defs>
+<text x="37" y="36.25" font-family="Arial, Aptos, sans-serif" font-size="25" font-weight="700" fill="#17212B" text-anchor="start">
+<tspan x="37" dy="0">Calcium imaging pipeline workflow</tspan>
+</text>
+<text x="563" y="32.625" font-family="Arial, Aptos, sans-serif" font-size="12.5" font-weight="400" fill="#5E6B76" text-anchor="start">
+<tspan x="563" dy="0">candidate ROI -&gt; human final ROI -&gt; re-extracted ΔF/F -&gt; population report</tspan>
+</text>
+<line x1="1050" y1="28" x2="1104" y2="28" stroke="#263B4A" stroke-width="3" stroke-linecap="round"/>
+<text x="1115" y="29.755000000000003" font-family="Arial, Aptos, sans-serif" font-size="9.5" font-weight="400" fill="#5E6B76" text-anchor="start">
+<tspan x="1115" dy="0">main</tspan>
+</text>
+<line x1="1160" y1="28" x2="1204" y2="28" stroke="#718096" stroke-width="1.3" stroke-linecap="round"/>
+<text x="1218" y="29.668" font-family="Arial, Aptos, sans-serif" font-size="9.2" font-weight="400" fill="#5E6B76" text-anchor="start">
+<tspan x="1218" dy="0">dependency</tspan>
+</text>
+<rect x="24" y="54" width="1232" height="184" rx="9" ry="9" fill="#EAF4FF" stroke="#A9CDED" stroke-width="1.1"/>
+<rect x="24" y="250" width="1232" height="174" rx="9" ry="9" fill="#FFF2E3" stroke="#F5BE78" stroke-width="1.1"/>
+<rect x="24" y="438" width="1232" height="244" rx="9" ry="9" fill="#EBF8EF" stroke="#A7D9B7" stroke-width="1.1"/>
+<rect x="42" y="76" width="96" height="44" rx="7" ry="7" fill="#D8EBFC" stroke="#2E78B7" stroke-width="1"/>
+<text x="90" y="99.77000000000001" font-family="Arial, Aptos, sans-serif" font-size="13" font-weight="700" fill="#2E78B7" text-anchor="middle">
+<tspan x="90" dy="0">Premanual</tspan>
+</text>
+<rect x="42" y="282" width="96" height="44" rx="7" ry="7" fill="#FBE1C3" stroke="#C06B24" stroke-width="1"/>
+<text x="90" y="306.06" font-family="Arial, Aptos, sans-serif" font-size="14" font-weight="700" fill="#C06B24" text-anchor="middle">
+<tspan x="90" dy="0">Manual</tspan>
+</text>
+<rect x="42" y="470" width="96" height="44" rx="7" ry="7" fill="#D9F1E1" stroke="#2D8C57" stroke-width="1"/>
+<text x="90" y="493.77" font-family="Arial, Aptos, sans-serif" font-size="13" font-weight="700" fill="#2D8C57" text-anchor="middle">
+<tspan x="90" dy="0">Postmanual</tspan>
+</text>
+<line x1="90" y1="121" x2="90" y2="281" stroke="#263B4A" stroke-width="2.6" stroke-linecap="round" marker-end="url(#arrow-main)"/>
+<line x1="90" y1="327" x2="90" y2="469" stroke="#263B4A" stroke-width="2.6" stroke-linecap="round" marker-end="url(#arrow-main)"/>
+<rect x="166" y="92" width="148" height="126" rx="7" ry="7" fill="#FFFFFF" stroke="#2E78B7" stroke-width="1.3"/>
+<rect x="166" y="92" width="148" height="7" fill="#2E78B7" stroke="#2E78B7" stroke-width="0"/>
+<text x="240" y="119.625" font-family="Arial, Aptos, sans-serif" font-size="12.5" font-weight="700" fill="#17212B" text-anchor="middle">
+<tspan x="240" dy="0">00 Original files</tspan>
+</text>
+<rect x="344" y="92" width="148" height="126" rx="7" ry="7" fill="#FFFFFF" stroke="#2E78B7" stroke-width="1.3"/>
+<rect x="344" y="92" width="148" height="7" fill="#2E78B7" stroke="#2E78B7" stroke-width="0"/>
+<text x="418" y="119.625" font-family="Arial, Aptos, sans-serif" font-size="12.5" font-weight="700" fill="#17212B" text-anchor="middle">
+<tspan x="418" dy="0">01 OIR -&gt; TIFF</tspan>
+</text>
+<rect x="522" y="92" width="148" height="126" rx="7" ry="7" fill="#FFFFFF" stroke="#2E78B7" stroke-width="1.3"/>
+<rect x="522" y="92" width="148" height="7" fill="#2E78B7" stroke="#2E78B7" stroke-width="0"/>
+<text x="596" y="119.625" font-family="Arial, Aptos, sans-serif" font-size="12.5" font-weight="700" fill="#17212B" text-anchor="middle">
+<tspan x="596" dy="0">02 Stim extraction</tspan>
+</text>
+<rect x="700" y="92" width="148" height="126" rx="7" ry="7" fill="#FFFFFF" stroke="#2E78B7" stroke-width="1.3"/>
+<rect x="700" y="92" width="148" height="7" fill="#2E78B7" stroke="#2E78B7" stroke-width="0"/>
+<text x="774" y="119.625" font-family="Arial, Aptos, sans-serif" font-size="12.5" font-weight="700" fill="#17212B" text-anchor="middle">
+<tspan x="774" dy="0">03 Motion correction</tspan>
+</text>
+<rect x="878" y="92" width="148" height="126" rx="7" ry="7" fill="#FFFFFF" stroke="#2E78B7" stroke-width="1.3"/>
+<rect x="878" y="92" width="148" height="7" fill="#2E78B7" stroke="#2E78B7" stroke-width="0"/>
+<text x="952" y="119.625" font-family="Arial, Aptos, sans-serif" font-size="12.5" font-weight="700" fill="#17212B" text-anchor="middle">
+<tspan x="952" dy="0">04 Spatial high-pass</tspan>
+</text>
+<rect x="1056" y="92" width="148" height="126" rx="7" ry="7" fill="#FFFFFF" stroke="#C06B24" stroke-width="1.3"/>
+<rect x="1056" y="92" width="148" height="7" fill="#C06B24" stroke="#C06B24" stroke-width="0"/>
+<text x="1130" y="119.625" font-family="Arial, Aptos, sans-serif" font-size="12.5" font-weight="700" fill="#17212B" text-anchor="middle">
+<tspan x="1130" dy="0">05 ROI candidates</tspan>
+</text>
+<line x1="318" y1="155" x2="339" y2="155" stroke="#263B4A" stroke-width="3" stroke-linecap="round" marker-end="url(#arrow-main)"/>
+<line x1="496" y1="155" x2="517" y2="155" stroke="#263B4A" stroke-width="3" stroke-linecap="round" marker-end="url(#arrow-main)"/>
+<line x1="674" y1="155" x2="695" y2="155" stroke="#263B4A" stroke-width="3" stroke-linecap="round" marker-end="url(#arrow-main)"/>
+<line x1="852" y1="155" x2="873" y2="155" stroke="#263B4A" stroke-width="3" stroke-linecap="round" marker-end="url(#arrow-main)"/>
+<line x1="1030" y1="155" x2="1051" y2="155" stroke="#263B4A" stroke-width="3" stroke-linecap="round" marker-end="url(#arrow-main)"/>
+<rect x="188" y="140" width="38" height="13" fill="#D7E9FA" stroke="#2E78B7" stroke-width="1"/>
+<rect x="184" y="150" width="58" height="34" rx="4" ry="4" fill="#D7E9FA" stroke="#2E78B7" stroke-width="1"/>
+<rect x="248" y="139" width="35" height="47" fill="#FFFFFF" stroke="#2E78B7" stroke-width="1"/>
+<rect x="272" y="139" width="11" height="11" fill="#D7E9FA" stroke="#2E78B7" stroke-width="1"/>
+<text x="266" y="164.755" font-family="Arial, Aptos, sans-serif" font-size="9.5" font-weight="700" fill="#2E78B7" text-anchor="middle">
+<tspan x="266" dy="0">OIR</tspan>
+</text>
+<text x="234" y="199.55200000000002" font-family="Arial, Aptos, sans-serif" font-size="8.8" font-weight="400" fill="#5E6B76" text-anchor="middle">
+<tspan x="234" dy="0">files + folders</tspan>
+</text>
+<rect x="362" y="141" width="34" height="43" fill="#FFFFFF" stroke="#2E78B7" stroke-width="1"/>
+<text x="379" y="164.61" font-family="Arial, Aptos, sans-serif" font-size="9" font-weight="700" fill="#2E78B7" text-anchor="middle">
+<tspan x="379" dy="0">OIR</tspan>
+</text>
+<rect x="431" y="142" width="38" height="31" fill="#E9F4FF" stroke="#2E78B7" stroke-width="1"/>
+<rect x="435" y="146" width="38" height="31" fill="#E9F4FF" stroke="#2E78B7" stroke-width="1"/>
+<rect x="439" y="150" width="38" height="31" fill="#E9F4FF" stroke="#2E78B7" stroke-width="1"/>
+<rect x="443" y="154" width="38" height="31" fill="#E9F4FF" stroke="#2E78B7" stroke-width="1"/>
+<text x="456.5" y="191.05200000000002" font-family="Arial, Aptos, sans-serif" font-size="8.8" font-weight="400" fill="#5E6B76" text-anchor="middle">
+<tspan x="456.5" dy="0">TIFF stack</tspan>
+</text>
+<line x1="539" y1="179" x2="603" y2="179" stroke="#D6DEE5" stroke-width="1" stroke-linecap="round"/>
+<line x1="539" y1="143" x2="539" y2="179" stroke="#D6DEE5" stroke-width="1" stroke-linecap="round"/>
+<line x1="540" y1="170" x2="550" y2="169" stroke="#2E78B7" stroke-width="1.4" stroke-linecap="round"/>
+<line x1="550" y1="169" x2="556" y2="150" stroke="#2E78B7" stroke-width="1.4" stroke-linecap="round"/>
+<line x1="556" y1="150" x2="563" y2="172" stroke="#2E78B7" stroke-width="1.4" stroke-linecap="round"/>
+<line x1="563" y1="172" x2="574" y2="171" stroke="#2E78B7" stroke-width="1.4" stroke-linecap="round"/>
+<line x1="574" y1="171" x2="580" y2="149" stroke="#2E78B7" stroke-width="1.4" stroke-linecap="round"/>
+<line x1="580" y1="149" x2="587" y2="173" stroke="#2E78B7" stroke-width="1.4" stroke-linecap="round"/>
+<line x1="587" y1="173" x2="600" y2="170" stroke="#2E78B7" stroke-width="1.4" stroke-linecap="round"/>
+<polyline points="540,170 550,169 556,150 563,172 574,171 580,149 587,173 600,170" fill="none" stroke="#2E78B7" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+<line x1="540" y1="160" x2="602" y2="160" stroke="#D94B4B" stroke-width="1" stroke-linecap="round" stroke-dasharray="5 4"/>
+<rect x="553" y="184" width="10" height="10" fill="#F7B955" stroke="#F7B955" stroke-width="0"/>
+<rect x="577" y="184" width="10" height="10" fill="#F7B955" stroke="#F7B955" stroke-width="0"/>
+<rect x="614" y="146" width="34" height="46" fill="#FFFFFF" stroke="#2E78B7" stroke-width="1"/>
+<line x1="614" y1="157" x2="648" y2="157" stroke="#D6DEE5" stroke-width="0.8" stroke-linecap="round"/>
+<line x1="614" y1="168" x2="648" y2="168" stroke="#D6DEE5" stroke-width="0.8" stroke-linecap="round"/>
+<line x1="614" y1="179" x2="648" y2="179" stroke="#D6DEE5" stroke-width="0.8" stroke-linecap="round"/>
+<text x="631.5" y="201.262" font-family="Arial, Aptos, sans-serif" font-size="7.8" font-weight="400" fill="#5E6B76" text-anchor="middle">
+<tspan x="631.5" dy="0">stim map</tspan>
+</text>
+<rect x="716" y="143" width="47" height="49" fill="#F8FBFF" stroke="#D6DEE5" stroke-width="1"/>
+<rect x="786" y="143" width="47" height="49" fill="#F8FBFF" stroke="#D6DEE5" stroke-width="1"/>
+<ellipse cx="729" cy="162" rx="5" ry="5" fill="#CFE3F7" stroke="#2E78B7" stroke-width="1"/>
+<ellipse cx="735" cy="166" rx="5" ry="5" fill="none" stroke="#D94B4B" stroke-width="0.8"/>
+<ellipse cx="742" cy="169" rx="5" ry="5" fill="#CFE3F7" stroke="#2E78B7" stroke-width="1"/>
+<ellipse cx="748" cy="173" rx="5" ry="5" fill="none" stroke="#D94B4B" stroke-width="0.8"/>
+<ellipse cx="753" cy="157" rx="5" ry="5" fill="#CFE3F7" stroke="#2E78B7" stroke-width="1"/>
+<ellipse cx="759" cy="161" rx="5" ry="5" fill="none" stroke="#D94B4B" stroke-width="0.8"/>
+<ellipse cx="802.5" cy="164.5" rx="5.5" ry="5.5" fill="#CFE3F7" stroke="#2E78B7" stroke-width="1.2"/>
+<ellipse cx="814.5" cy="171.5" rx="5.5" ry="5.5" fill="#CFE3F7" stroke="#2E78B7" stroke-width="1.2"/>
+<ellipse cx="824.5" cy="159.5" rx="5.5" ry="5.5" fill="#CFE3F7" stroke="#2E78B7" stroke-width="1.2"/>
+<text x="739.5" y="200.67499999999998" font-family="Arial, Aptos, sans-serif" font-size="7.5" font-weight="400" fill="#5E6B76" text-anchor="middle">
+<tspan x="739.5" dy="0">before</tspan>
+</text>
+<text x="809.5" y="200.67499999999998" font-family="Arial, Aptos, sans-serif" font-size="7.5" font-weight="400" fill="#5E6B76" text-anchor="middle">
+<tspan x="809.5" dy="0">after</tspan>
+</text>
+<rect x="894" y="143" width="47" height="49" fill="#F4F0EA" stroke="#D6DEE5" stroke-width="1"/>
+<ellipse cx="917" cy="164" rx="13" ry="11" fill="#D8C7AE" stroke="#D8C7AE" stroke-width="0"/>
+<rect x="964" y="143" width="47" height="49" fill="#F8FBFF" stroke="#D6DEE5" stroke-width="1"/>
+<ellipse cx="979" cy="158" rx="6" ry="5" fill="none" stroke="#2D8C57" stroke-width="1.4"/>
+<ellipse cx="998" cy="158" rx="6" ry="5" fill="none" stroke="#2D8C57" stroke-width="1.4"/>
+<ellipse cx="979" cy="174" rx="6" ry="5" fill="none" stroke="#2D8C57" stroke-width="1.4"/>
+<ellipse cx="998" cy="174" rx="6" ry="5" fill="none" stroke="#2D8C57" stroke-width="1.4"/>
+<text x="952.5" y="201.233" font-family="Arial, Aptos, sans-serif" font-size="7.7" font-weight="400" fill="#5E6B76" text-anchor="middle">
+<tspan x="952.5" dy="0">background down, edges up</tspan>
+</text>
+<rect x="1073" y="139" width="52" height="20" rx="4" ry="4" fill="#EDF4FB" stroke="#2E78B7" stroke-width="1"/>
+<text x="1099" y="151.465" font-family="Arial, Aptos, sans-serif" font-size="8.5" font-weight="700" fill="#2E78B7" text-anchor="middle">
+<tspan x="1099" dy="0">suite2p</tspan>
+</text>
+<rect x="1073" y="167" width="52" height="20" rx="4" ry="4" fill="#F3F8EF" stroke="#2D8C57" stroke-width="1"/>
+<text x="1099" y="179.465" font-family="Arial, Aptos, sans-serif" font-size="8.5" font-weight="700" fill="#2D8C57" text-anchor="middle">
+<tspan x="1099" dy="0">Cellpose</tspan>
+</text>
+<ellipse cx="1169" cy="153" rx="10" ry="9" fill="none" stroke="#F7B955" stroke-width="2"/>
+<ellipse cx="1177" cy="171" rx="9" ry="9" fill="none" stroke="#F7B955" stroke-width="2"/>
+<ellipse cx="1159.5" cy="175.5" rx="7.5" ry="7.5" fill="none" stroke="#F7B955" stroke-width="2"/>
+<text x="1166.5" y="195.372" font-family="Arial, Aptos, sans-serif" font-size="7.6" font-weight="700" fill="#C06B24" text-anchor="middle">
+<tspan x="1166.5" dy="0">Candidate ROI</tspan>
+<tspan x="1166.5" dy="8.664">not final</tspan>
+</text>
+<rect x="176" y="288" width="932" height="110" rx="9" ry="9" fill="#FFFFFF" stroke="#C06B24" stroke-width="1.4"/>
+<line x1="1130" y1="222" x2="1130" y2="287" stroke="#263B4A" stroke-width="3" stroke-linecap="round" marker-end="url(#arrow-main)"/>
+<text x="195" y="312.34999999999997" font-family="Arial, Aptos, sans-serif" font-size="15" font-weight="700" fill="#C06B24" text-anchor="start">
+<tspan x="195" dy="0">Human curation</tspan>
+</text>
+<text x="248" y="335.755" font-family="Arial, Aptos, sans-serif" font-size="9.5" font-weight="400" fill="#5E6B76" text-anchor="middle">
+<tspan x="248" dy="0">Candidate ROI pool</tspan>
+</text>
+<ellipse cx="215" cy="353.5" rx="9" ry="7.5" fill="none" stroke="#F7B955" stroke-width="1.6"/>
+<ellipse cx="249" cy="353.5" rx="9" ry="7.5" fill="none" stroke="#F7B955" stroke-width="1.6"/>
+<ellipse cx="215" cy="373.5" rx="9" ry="7.5" fill="none" stroke="#F7B955" stroke-width="1.6"/>
+<ellipse cx="249" cy="373.5" rx="9" ry="7.5" fill="none" stroke="#F7B955" stroke-width="1.6"/>
+<rect x="366" y="313" width="232" height="69" fill="#F8FAFC" stroke="#C06B24" stroke-width="1.2"/>
+<rect x="366" y="313" width="232" height="9" fill="#FBE2C8" stroke="#C06B24" stroke-width="0"/>
+<ellipse cx="419.5" cy="347" rx="17.5" ry="13" fill="none" stroke="#2D8C57" stroke-width="1.8"/>
+<ellipse cx="467.5" cy="349" rx="13.5" ry="12" fill="none" stroke="#F7B955" stroke-width="1.6"/>
+<ellipse cx="526.5" cy="347" rx="15.5" ry="14" fill="none" stroke="#D94B4B" stroke-width="1.4"/>
+<line x1="549" y1="366" x2="567" y2="376" stroke="#17212B" stroke-width="1.3" stroke-linecap="round"/>
+<line x1="549" y1="366" x2="554" y2="386" stroke="#17212B" stroke-width="1.3" stroke-linecap="round"/>
+<rect x="665" y="325" width="96" height="23" rx="4" ry="4" fill="#FDECEC" stroke="#D94B4B" stroke-width="1"/>
+<text x="713" y="337.87800000000004" font-family="Arial, Aptos, sans-serif" font-size="8.2" font-weight="700" fill="#D94B4B" text-anchor="middle">
+<tspan x="713" dy="0">delete false ROI</tspan>
+</text>
+<rect x="665" y="356" width="96" height="23" rx="4" ry="4" fill="#E9F8EF" stroke="#2D8C57" stroke-width="1"/>
+<text x="713" y="368.87800000000004" font-family="Arial, Aptos, sans-serif" font-size="8.2" font-weight="700" fill="#2D8C57" text-anchor="middle">
+<tspan x="713" dy="0">draw missing ROI</tspan>
+</text>
+<rect x="836" y="321" width="170" height="61" rx="7" ry="7" fill="#F1FBF4" stroke="#2D8C57" stroke-width="1.5"/>
+<text x="921" y="338.625" font-family="Arial, Aptos, sans-serif" font-size="12.5" font-weight="700" fill="#2D8C57" text-anchor="middle">
+<tspan x="921" dy="0">Final ROI set</tspan>
+</text>
+<ellipse cx="872.5" cy="357" rx="7.5" ry="6" fill="none" stroke="#2D8C57" stroke-width="1.4"/>
+<ellipse cx="893.5" cy="362" rx="7.5" ry="6" fill="none" stroke="#2D8C57" stroke-width="1.4"/>
+<ellipse cx="914.5" cy="357" rx="7.5" ry="6" fill="none" stroke="#2D8C57" stroke-width="1.4"/>
+<ellipse cx="935.5" cy="362" rx="7.5" ry="6" fill="none" stroke="#2D8C57" stroke-width="1.4"/>
+<ellipse cx="956.5" cy="357" rx="7.5" ry="6" fill="none" stroke="#2D8C57" stroke-width="1.4"/>
+<text x="923" y="393.87800000000004" font-family="Arial, Aptos, sans-serif" font-size="8.2" font-weight="700" fill="#C06B24" text-anchor="middle">
+<tspan x="923" dy="0">the only final ROI decision point</tspan>
+</text>
+<text x="691" y="278.64" font-family="Arial, Aptos, sans-serif" font-size="16" font-weight="700" fill="#C06B24" text-anchor="middle">
+<tspan x="691" dy="0">Manual ROI curation</tspan>
+</text>
+<text x="179" y="455.90000000000003" font-family="Arial, Aptos, sans-serif" font-size="10" font-weight="700" fill="#5E6B76" text-anchor="start">
+<tspan x="179" dy="0">Auxiliary inputs used downstream</tspan>
+</text>
+<rect x="176" y="462" width="148" height="28" rx="14" ry="14" fill="#FFFFFF" stroke="#2E78B7" stroke-width="1"/>
+<text x="250" y="476.965" font-family="Arial, Aptos, sans-serif" font-size="8.5" font-weight="700" fill="#2E78B7" text-anchor="middle">
+<tspan x="250" dy="0">Motion-corrected movie</tspan>
+</text>
+<rect x="340" y="462" width="102" height="28" rx="14" ry="14" fill="#FFFFFF" stroke="#2D8C57" stroke-width="1"/>
+<text x="391" y="476.965" font-family="Arial, Aptos, sans-serif" font-size="8.5" font-weight="700" fill="#2D8C57" text-anchor="middle">
+<tspan x="391" dy="0">Final ROI set</tspan>
+</text>
+<rect x="474" y="462" width="80" height="28" rx="14" ry="14" fill="#FFFFFF" stroke="#2E78B7" stroke-width="1"/>
+<text x="514" y="476.965" font-family="Arial, Aptos, sans-serif" font-size="8.5" font-weight="700" fill="#2E78B7" text-anchor="middle">
+<tspan x="514" dy="0">Stim map</tspan>
+</text>
+<rect x="82" y="520" width="150" height="142" rx="7" ry="7" fill="#FFFFFF" stroke="#2D8C57" stroke-width="1.3"/>
+<rect x="82" y="520" width="150" height="7" fill="#2D8C57" stroke="#2D8C57" stroke-width="0"/>
+<text x="157" y="547.625" font-family="Arial, Aptos, sans-serif" font-size="12.5" font-weight="700" fill="#17212B" text-anchor="middle">
+<tspan x="157" dy="0">06 dF/F extraction</tspan>
+</text>
+<rect x="250" y="520" width="104" height="142" rx="7" ry="7" fill="#FFFFFF" stroke="#2D8C57" stroke-width="1.3"/>
+<rect x="250" y="520" width="104" height="7" fill="#2D8C57" stroke="#2D8C57" stroke-width="0"/>
+<text x="302" y="547.625" font-family="Arial, Aptos, sans-serif" font-size="12.5" font-weight="700" fill="#17212B" text-anchor="middle">
+<tspan x="302" dy="0">07 Event detection</tspan>
+</text>
+<rect x="372" y="520" width="112" height="142" rx="7" ry="7" fill="#FFFFFF" stroke="#2D8C57" stroke-width="1.3"/>
+<rect x="372" y="520" width="112" height="7" fill="#2D8C57" stroke="#2D8C57" stroke-width="0"/>
+<text x="428" y="547.625" font-family="Arial, Aptos, sans-serif" font-size="12.5" font-weight="700" fill="#17212B" text-anchor="middle">
+<tspan x="428" dy="0">08 Stimulus response</tspan>
+</text>
+<rect x="502" y="520" width="124" height="142" rx="7" ry="7" fill="#FFFFFF" stroke="#2D8C57" stroke-width="1.3"/>
+<rect x="502" y="520" width="124" height="7" fill="#2D8C57" stroke="#2D8C57" stroke-width="0"/>
+<text x="564" y="547.625" font-family="Arial, Aptos, sans-serif" font-size="12.5" font-weight="700" fill="#17212B" text-anchor="middle">
+<tspan x="564" dy="0">09 AoLP tuning</tspan>
+</text>
+<rect x="644" y="520" width="242" height="142" rx="7" ry="7" fill="#FFFFFF" stroke="#2D8C57" stroke-width="1.3"/>
+<rect x="644" y="520" width="242" height="7" fill="#2D8C57" stroke="#2D8C57" stroke-width="0"/>
+<text x="765" y="547.2479999999999" font-family="Arial, Aptos, sans-serif" font-size="11.2" font-weight="700" fill="#17212B" text-anchor="middle">
+<tspan x="765" dy="0">10-16 Population analysis</tspan>
+</text>
+<rect x="904" y="520" width="112" height="142" rx="7" ry="7" fill="#FFFFFF" stroke="#2D8C57" stroke-width="1.3"/>
+<rect x="904" y="520" width="112" height="7" fill="#2D8C57" stroke="#2D8C57" stroke-width="0"/>
+<text x="960" y="547.625" font-family="Arial, Aptos, sans-serif" font-size="12.5" font-weight="700" fill="#17212B" text-anchor="middle">
+<tspan x="960" dy="0">17 Cross-trial summary</tspan>
+</text>
+<rect x="1034" y="520" width="132" height="142" rx="7" ry="7" fill="#FFFFFF" stroke="#2D8C57" stroke-width="1.3"/>
+<rect x="1034" y="520" width="132" height="7" fill="#2D8C57" stroke="#2D8C57" stroke-width="0"/>
+<text x="1100" y="547.625" font-family="Arial, Aptos, sans-serif" font-size="12.5" font-weight="700" fill="#17212B" text-anchor="middle">
+<tspan x="1100" dy="0">18 HTML report</tspan>
+</text>
+<line x1="236" y1="591" x2="245" y2="591" stroke="#263B4A" stroke-width="3" stroke-linecap="round" marker-end="url(#arrow-main)"/>
+<line x1="358" y1="591" x2="367" y2="591" stroke="#263B4A" stroke-width="3" stroke-linecap="round" marker-end="url(#arrow-main)"/>
+<line x1="488" y1="591" x2="497" y2="591" stroke="#263B4A" stroke-width="3" stroke-linecap="round" marker-end="url(#arrow-main)"/>
+<line x1="630" y1="591" x2="639" y2="591" stroke="#263B4A" stroke-width="3" stroke-linecap="round" marker-end="url(#arrow-main)"/>
+<line x1="890" y1="591" x2="899" y2="591" stroke="#263B4A" stroke-width="3" stroke-linecap="round" marker-end="url(#arrow-main)"/>
+<line x1="1020" y1="591" x2="1029" y2="591" stroke="#263B4A" stroke-width="3" stroke-linecap="round" marker-end="url(#arrow-main)"/>
+<line x1="250" y1="490" x2="142" y2="508" stroke="#718096" stroke-width="1.4" stroke-linecap="round"/>
+<line x1="250" y1="490" x2="142" y2="520" stroke="#718096" stroke-width="1.4" stroke-linecap="round" marker-end="url(#arrow-aux)"/>
+<line x1="391" y1="490" x2="172" y2="508" stroke="#718096" stroke-width="1.4" stroke-linecap="round"/>
+<line x1="391" y1="490" x2="172" y2="520" stroke="#718096" stroke-width="1.4" stroke-linecap="round" marker-end="url(#arrow-aux)"/>
+<line x1="514" y1="490" x2="428" y2="508" stroke="#718096" stroke-width="1.4" stroke-linecap="round"/>
+<line x1="514" y1="490" x2="428" y2="520" stroke="#718096" stroke-width="1.4" stroke-linecap="round" marker-end="url(#arrow-aux)"/>
+<rect x="98" y="564" width="30" height="24" fill="#EEF7FF" stroke="#2E78B7" stroke-width="1"/>
+<rect x="103" y="569" width="30" height="24" fill="#EEF7FF" stroke="#2E78B7" stroke-width="1"/>
+<ellipse cx="160" cy="577" rx="15" ry="12" fill="none" stroke="#2D8C57" stroke-width="2"/>
+<rect x="198" y="563" width="24" height="18" rx="3" ry="3" fill="#F5F7FA" stroke="#D6DEE5" stroke-width="1"/>
+<text x="210" y="573.32" font-family="Arial, Aptos, sans-serif" font-size="8" font-weight="700" fill="#17212B" text-anchor="middle">
+<tspan x="210" dy="0">F</tspan>
+</text>
+<rect x="198" y="585" width="24" height="18" rx="3" ry="3" fill="#F5F7FA" stroke="#D6DEE5" stroke-width="1"/>
+<text x="210" y="595.1750000000001" font-family="Arial, Aptos, sans-serif" font-size="7.5" font-weight="700" fill="#17212B" text-anchor="middle">
+<tspan x="210" dy="0">Fneu</tspan>
+</text>
+<text x="159" y="613.878" font-family="Arial, Aptos, sans-serif" font-size="8.2" font-weight="700" fill="#17212B" text-anchor="middle">
+<tspan x="159" dy="0">F - 0.7Fneu</tspan>
+</text>
+<text x="160" y="628.6750000000001" font-family="Arial, Aptos, sans-serif" font-size="7.5" font-weight="400" fill="#5E6B76" text-anchor="middle">
+<tspan x="160" dy="0">non-ROI PCA -&gt; F0 -&gt; ΔF/F</tspan>
+</text>
+<text x="157" y="647.762" font-family="Arial, Aptos, sans-serif" font-size="7.8" font-weight="700" fill="#C06B24" text-anchor="middle">
+<tspan x="157" dy="0">re-extract from corrected movie</tspan>
+</text>
+<line x1="264" y1="606" x2="275" y2="604" stroke="#2D8C57" stroke-width="1.6" stroke-linecap="round"/>
+<line x1="275" y1="604" x2="285" y2="580" stroke="#2D8C57" stroke-width="1.6" stroke-linecap="round"/>
+<line x1="285" y1="580" x2="293" y2="606" stroke="#2D8C57" stroke-width="1.6" stroke-linecap="round"/>
+<line x1="293" y1="606" x2="311" y2="603" stroke="#2D8C57" stroke-width="1.6" stroke-linecap="round"/>
+<line x1="311" y1="603" x2="319" y2="575" stroke="#2D8C57" stroke-width="1.6" stroke-linecap="round"/>
+<line x1="319" y1="575" x2="328" y2="607" stroke="#2D8C57" stroke-width="1.6" stroke-linecap="round"/>
+<line x1="328" y1="607" x2="342" y2="604" stroke="#2D8C57" stroke-width="1.6" stroke-linecap="round"/>
+<polyline points="264,606 275,604 285,580 293,606 311,603 319,575 328,607 342,604" fill="none" stroke="#2D8C57" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+<line x1="285" y1="568" x2="285.1" y2="616" stroke="#D94B4B" stroke-width="1.2" stroke-linecap="round"/>
+<ellipse cx="285.5" cy="568.5" rx="3.5" ry="3.5" fill="#D94B4B" stroke="#D94B4B" stroke-width="0"/>
+<line x1="319" y1="568" x2="319.1" y2="616" stroke="#D94B4B" stroke-width="1.2" stroke-linecap="round"/>
+<ellipse cx="319.5" cy="568.5" rx="3.5" ry="3.5" fill="#D94B4B" stroke="#D94B4B" stroke-width="0"/>
+<text x="302" y="627.76" font-family="Arial, Aptos, sans-serif" font-size="8" font-weight="400" fill="#5E6B76" text-anchor="middle">
+<tspan x="302" dy="0">events on ΔF/F</tspan>
+<tspan x="302" dy="9.12">(not spikes)</tspan>
+</text>
+<rect x="385" y="567" width="28" height="36" fill="#FFFFFF" stroke="#2E78B7" stroke-width="1"/>
+<line x1="385" y1="579" x2="413" y2="579" stroke="#D6DEE5" stroke-width="0.8" stroke-linecap="round"/>
+<line x1="385" y1="591" x2="413" y2="591" stroke="#D6DEE5" stroke-width="0.8" stroke-linecap="round"/>
+<line x1="438" y1="571" x2="450" y2="569" stroke="#2D8C57" stroke-width="1" stroke-linecap="round"/>
+<line x1="450" y1="569" x2="457" y2="577" stroke="#2D8C57" stroke-width="1" stroke-linecap="round"/>
+<line x1="457" y1="577" x2="471" y2="572" stroke="#2D8C57" stroke-width="1" stroke-linecap="round"/>
+<polyline points="438,571 450,569 457,577 471,572" fill="none" stroke="#2D8C57" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<line x1="452" y1="567" x2="452" y2="580" stroke="#D94B4B" stroke-width="0.9" stroke-linecap="round"/>
+<line x1="438" y1="583" x2="450" y2="581" stroke="#2D8C57" stroke-width="1" stroke-linecap="round"/>
+<line x1="450" y1="581" x2="457" y2="589" stroke="#2D8C57" stroke-width="1" stroke-linecap="round"/>
+<line x1="457" y1="589" x2="471" y2="584" stroke="#2D8C57" stroke-width="1" stroke-linecap="round"/>
+<polyline points="438,583 450,581 457,589 471,584" fill="none" stroke="#2D8C57" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<line x1="452" y1="579" x2="452" y2="592" stroke="#D94B4B" stroke-width="0.9" stroke-linecap="round"/>
+<line x1="438" y1="595" x2="450" y2="593" stroke="#2D8C57" stroke-width="1" stroke-linecap="round"/>
+<line x1="450" y1="593" x2="457" y2="601" stroke="#2D8C57" stroke-width="1" stroke-linecap="round"/>
+<line x1="457" y1="601" x2="471" y2="596" stroke="#2D8C57" stroke-width="1" stroke-linecap="round"/>
+<polyline points="438,595 450,593 457,601 471,596" fill="none" stroke="#2D8C57" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<line x1="452" y1="591" x2="452" y2="604" stroke="#D94B4B" stroke-width="0.9" stroke-linecap="round"/>
+<rect x="442" y="611" width="8" height="8" fill="#EFF8F0" stroke="#EFF8F0" stroke-width="0"/>
+<rect x="450" y="611" width="8" height="8" fill="#CFEED7" stroke="#CFEED7" stroke-width="0"/>
+<rect x="458" y="611" width="8" height="8" fill="#A6DDB8" stroke="#A6DDB8" stroke-width="0"/>
+<rect x="466" y="611" width="8" height="8" fill="#76C992" stroke="#76C992" stroke-width="0"/>
+<rect x="442" y="619" width="8" height="8" fill="#CFEED7" stroke="#CFEED7" stroke-width="0"/>
+<rect x="450" y="619" width="8" height="8" fill="#A6DDB8" stroke="#A6DDB8" stroke-width="0"/>
+<rect x="458" y="619" width="8" height="8" fill="#76C992" stroke="#76C992" stroke-width="0"/>
+<rect x="466" y="619" width="8" height="8" fill="#EFF8F0" stroke="#EFF8F0" stroke-width="0"/>
+<rect x="442" y="627" width="8" height="8" fill="#A6DDB8" stroke="#A6DDB8" stroke-width="0"/>
+<rect x="450" y="627" width="8" height="8" fill="#76C992" stroke="#76C992" stroke-width="0"/>
+<rect x="458" y="627" width="8" height="8" fill="#EFF8F0" stroke="#EFF8F0" stroke-width="0"/>
+<rect x="466" y="627" width="8" height="8" fill="#CFEED7" stroke="#CFEED7" stroke-width="0"/>
+<text x="428" y="647.233" font-family="Arial, Aptos, sans-serif" font-size="7.7" font-weight="400" fill="#5E6B76" text-anchor="middle">
+<tspan x="428" dy="0">stim map -&gt; trial alignment</tspan>
+</text>
+<ellipse cx="563" cy="604" rx="36" ry="36" fill="#FBFFFC" stroke="#D6DEE5" stroke-width="1"/>
+<line x1="535" y1="604" x2="591" y2="604" stroke="#D6DEE5" stroke-width="1" stroke-linecap="round"/>
+<line x1="563" y1="576" x2="563" y2="632" stroke="#D6DEE5" stroke-width="1" stroke-linecap="round"/>
+<line x1="563" y1="604" x2="575" y2="587" stroke="#2D8C57" stroke-width="1.6" stroke-linecap="round"/>
+<line x1="575" y1="587" x2="587" y2="595" stroke="#2D8C57" stroke-width="1.6" stroke-linecap="round"/>
+<line x1="587" y1="595" x2="584" y2="612" stroke="#2D8C57" stroke-width="1.6" stroke-linecap="round"/>
+<line x1="584" y1="612" x2="568" y2="620" stroke="#2D8C57" stroke-width="1.6" stroke-linecap="round"/>
+<line x1="568" y1="620" x2="556" y2="612" stroke="#2D8C57" stroke-width="1.6" stroke-linecap="round"/>
+<polyline points="563,604 575,587 587,595 584,612 568,620 556,612" fill="none" stroke="#2D8C57" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+<line x1="563" y1="604" x2="582" y2="586" stroke="#D94B4B" stroke-width="1.8" stroke-linecap="round"/>
+<text x="563.5" y="573.378" font-family="Arial, Aptos, sans-serif" font-size="8.2" font-weight="700" fill="#2E78B7" text-anchor="middle">
+<tspan x="563.5" dy="0">0-180° AoLP</tspan>
+</text>
+<text x="564" y="647.762" font-family="Arial, Aptos, sans-serif" font-size="7.8" font-weight="700" fill="#C06B24" text-anchor="middle">
+<tspan x="564" dy="0">180°-periodic axial data</tspan>
+</text>
+<text x="765" y="567.1170000000001" font-family="Arial, Aptos, sans-serif" font-size="7.3" font-weight="700" fill="#C06B24" text-anchor="middle">
+<tspan x="765" dy="0">ROI-level analysis, not ROI detection</tspan>
+</text>
+<rect x="660" y="576" width="67" height="33" fill="#FAFCFB" stroke="#A7D9B7" stroke-width="1"/>
+<text x="693.5" y="604.182" font-family="Arial, Aptos, sans-serif" font-size="5.8" font-weight="400" fill="#5E6B76" text-anchor="middle">
+<tspan x="693.5" dy="0">trace QC</tspan>
+</text>
+<line x1="665" y1="594" x2="676" y2="588" stroke="#2D8C57" stroke-width="1.2" stroke-linecap="round"/>
+<line x1="676" y1="588" x2="684" y2="597" stroke="#2D8C57" stroke-width="1.2" stroke-linecap="round"/>
+<line x1="684" y1="597" x2="698" y2="584" stroke="#2D8C57" stroke-width="1.2" stroke-linecap="round"/>
+<line x1="698" y1="584" x2="714" y2="592" stroke="#2D8C57" stroke-width="1.2" stroke-linecap="round"/>
+<polyline points="665,594 676,588 684,597 698,584 714,592" fill="none" stroke="#2D8C57" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="734" y="576" width="67" height="33" fill="#FAFCFB" stroke="#A7D9B7" stroke-width="1"/>
+<text x="767.5" y="604.182" font-family="Arial, Aptos, sans-serif" font-size="5.8" font-weight="400" fill="#5E6B76" text-anchor="middle">
+<tspan x="767.5" dy="0">feature table</tspan>
+</text>
+<line x1="740" y1="583" x2="792" y2="583" stroke="#D6DEE5" stroke-width="0.7" stroke-linecap="round"/>
+<line x1="740" y1="589" x2="792" y2="589" stroke="#D6DEE5" stroke-width="0.7" stroke-linecap="round"/>
+<line x1="740" y1="595" x2="792" y2="595" stroke="#D6DEE5" stroke-width="0.7" stroke-linecap="round"/>
+<line x1="742" y1="581" x2="742" y2="599" stroke="#D6DEE5" stroke-width="0.7" stroke-linecap="round"/>
+<line x1="758" y1="581" x2="758" y2="599" stroke="#D6DEE5" stroke-width="0.7" stroke-linecap="round"/>
+<line x1="774" y1="581" x2="774" y2="599" stroke="#D6DEE5" stroke-width="0.7" stroke-linecap="round"/>
+<rect x="808" y="576" width="67" height="33" fill="#FAFCFB" stroke="#A7D9B7" stroke-width="1"/>
+<text x="841.5" y="604.182" font-family="Arial, Aptos, sans-serif" font-size="5.8" font-weight="400" fill="#5E6B76" text-anchor="middle">
+<tspan x="841.5" dy="0">similarity</tspan>
+</text>
+<rect x="817" y="582" width="9" height="5" fill="#E8F5ED" stroke="none" stroke-width="0"/>
+<rect x="827" y="582" width="9" height="5" fill="#BEE5CA" stroke="none" stroke-width="0"/>
+<rect x="837" y="582" width="9" height="5" fill="#80C99B" stroke="none" stroke-width="0"/>
+<rect x="847" y="582" width="9" height="5" fill="#3E9D68" stroke="none" stroke-width="0"/>
+<rect x="817" y="588" width="9" height="5" fill="#BEE5CA" stroke="none" stroke-width="0"/>
+<rect x="827" y="588" width="9" height="5" fill="#80C99B" stroke="none" stroke-width="0"/>
+<rect x="837" y="588" width="9" height="5" fill="#3E9D68" stroke="none" stroke-width="0"/>
+<rect x="847" y="588" width="9" height="5" fill="#E8F5ED" stroke="none" stroke-width="0"/>
+<rect x="817" y="594" width="9" height="5" fill="#80C99B" stroke="none" stroke-width="0"/>
+<rect x="827" y="594" width="9" height="5" fill="#3E9D68" stroke="none" stroke-width="0"/>
+<rect x="837" y="594" width="9" height="5" fill="#E8F5ED" stroke="none" stroke-width="0"/>
+<rect x="847" y="594" width="9" height="5" fill="#BEE5CA" stroke="none" stroke-width="0"/>
+<rect x="660" y="618" width="67" height="33" fill="#FAFCFB" stroke="#A7D9B7" stroke-width="1"/>
+<text x="693.5" y="646.182" font-family="Arial, Aptos, sans-serif" font-size="5.8" font-weight="400" fill="#5E6B76" text-anchor="middle">
+<tspan x="693.5" dy="0">hier. tree</tspan>
+</text>
+<line x1="672" y1="641" x2="672" y2="625" stroke="#17212B" stroke-width="0.9" stroke-linecap="round"/>
+<line x1="672" y1="626" x2="694" y2="626" stroke="#17212B" stroke-width="0.9" stroke-linecap="round"/>
+<line x1="694" y1="626" x2="694" y2="635" stroke="#17212B" stroke-width="0.9" stroke-linecap="round"/>
+<line x1="694" y1="635" x2="714" y2="635" stroke="#17212B" stroke-width="0.9" stroke-linecap="round"/>
+<rect x="734" y="618" width="67" height="33" fill="#FAFCFB" stroke="#A7D9B7" stroke-width="1"/>
+<text x="767.5" y="646.182" font-family="Arial, Aptos, sans-serif" font-size="5.8" font-weight="400" fill="#5E6B76" text-anchor="middle">
+<tspan x="767.5" dy="0">Leiden graph</tspan>
+</text>
+<ellipse cx="755.5" cy="629.5" rx="3.5" ry="3.5" fill="#E9F8EF" stroke="#2D8C57" stroke-width="1"/>
+<ellipse cx="775.5" cy="629.5" rx="3.5" ry="3.5" fill="#E9F8EF" stroke="#2D8C57" stroke-width="1"/>
+<ellipse cx="787.5" cy="638.5" rx="3.5" ry="3.5" fill="#E9F8EF" stroke="#2D8C57" stroke-width="1"/>
+<ellipse cx="760.5" cy="639.5" rx="3.5" ry="3.5" fill="#E9F8EF" stroke="#2D8C57" stroke-width="1"/>
+<line x1="759" y1="630" x2="772" y2="630" stroke="#2D8C57" stroke-width="1" stroke-linecap="round"/>
+<line x1="779" y1="631" x2="785" y2="636" stroke="#2D8C57" stroke-width="1" stroke-linecap="round"/>
+<line x1="761" y1="638" x2="785" y2="638" stroke="#2D8C57" stroke-width="1" stroke-linecap="round"/>
+<rect x="808" y="618" width="67" height="33" fill="#FAFCFB" stroke="#A7D9B7" stroke-width="1"/>
+<text x="841.5" y="646.182" font-family="Arial, Aptos, sans-serif" font-size="5.8" font-weight="400" fill="#5E6B76" text-anchor="middle">
+<tspan x="841.5" dy="0">PCA/UMAP</tspan>
+</text>
+<ellipse cx="828.25" cy="634.25" rx="2.25" ry="2.25" fill="#2D8C57" stroke="none" stroke-width="0"/>
+<ellipse cx="837.25" cy="629.25" rx="2.25" ry="2.25" fill="#2E78B7" stroke="none" stroke-width="0"/>
+<ellipse cx="852.25" cy="636.25" rx="2.25" ry="2.25" fill="#2D8C57" stroke="none" stroke-width="0"/>
+<ellipse cx="861.25" cy="630.25" rx="2.25" ry="2.25" fill="#2E78B7" stroke="none" stroke-width="0"/>
+<ellipse cx="844.25" cy="638.25" rx="2.25" ry="2.25" fill="#2D8C57" stroke="none" stroke-width="0"/>
+<rect x="917" y="570" width="20" height="7" fill="#EAF4FF" stroke="#2E78B7" stroke-width="0.8"/>
+<rect x="915" y="577" width="39" height="22" rx="3" ry="3" fill="#EAF4FF" stroke="#2E78B7" stroke-width="0.8"/>
+<rect x="937" y="580" width="20" height="7" fill="#EAF4FF" stroke="#2E78B7" stroke-width="0.8"/>
+<rect x="935" y="587" width="39" height="22" rx="3" ry="3" fill="#EAF4FF" stroke="#2E78B7" stroke-width="0.8"/>
+<rect x="957" y="590" width="20" height="7" fill="#EAF4FF" stroke="#2E78B7" stroke-width="0.8"/>
+<rect x="955" y="597" width="39" height="22" rx="3" ry="3" fill="#EAF4FF" stroke="#2E78B7" stroke-width="0.8"/>
+<rect x="932" y="620" width="72" height="22" fill="#FFFFFF" stroke="#2D8C57" stroke-width="1"/>
+<line x1="932" y1="627" x2="1004" y2="627" stroke="#D6DEE5" stroke-width="0.7" stroke-linecap="round"/>
+<line x1="932" y1="634" x2="1004" y2="634" stroke="#D6DEE5" stroke-width="0.7" stroke-linecap="round"/>
+<text x="960" y="652.204" font-family="Arial, Aptos, sans-serif" font-size="7.6" font-weight="400" fill="#5E6B76" text-anchor="middle">
+<tspan x="960" dy="0">trial tables + summary plots</tspan>
+</text>
+<rect x="1048" y="565" width="104" height="72" rx="5" ry="5" fill="#FFFFFF" stroke="#2D8C57" stroke-width="1.2"/>
+<rect x="1048" y="565" width="104" height="13" fill="#E9F8EF" stroke="#2D8C57" stroke-width="0"/>
+<ellipse cx="1058" cy="572" rx="2" ry="2" fill="#D94B4B" stroke="none" stroke-width="0"/>
+<ellipse cx="1066" cy="572" rx="2" ry="2" fill="#F7B955" stroke="none" stroke-width="0"/>
+<ellipse cx="1074" cy="572" rx="2" ry="2" fill="#2D8C57" stroke="none" stroke-width="0"/>
+<rect x="1058" y="588" width="35" height="20" fill="#F8FBFF" stroke="#2E78B7" stroke-width="0.8"/>
+<line x1="1061" y1="603" x2="1069" y2="594" stroke="#2E78B7" stroke-width="1" stroke-linecap="round"/>
+<line x1="1069" y1="594" x2="1079" y2="601" stroke="#2E78B7" stroke-width="1" stroke-linecap="round"/>
+<line x1="1079" y1="601" x2="1089" y2="590" stroke="#2E78B7" stroke-width="1" stroke-linecap="round"/>
+<polyline points="1061,603 1069,594 1079,601 1089,590" fill="none" stroke="#2E78B7" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="1101" y="587" width="39" height="21" fill="#FFFDF8" stroke="#F7B955" stroke-width="0.8"/>
+<rect x="1058" y="616" width="82" height="10" fill="#E9F8EF" stroke="#2D8C57" stroke-width="0.8"/>
+<text x="1100" y="648.088" font-family="Arial, Aptos, sans-serif" font-size="7.2" font-weight="400" fill="#5E6B76" text-anchor="middle">
+<tspan x="1100" dy="0">plots | tables | QC | summary</tspan>
+</text>
+<text x="43" y="701.9" font-family="Arial, Aptos, sans-serif" font-size="10" font-weight="400" fill="#5E6B76" text-anchor="start">
+<tspan x="43" dy="0">Design rule: automatic ROI detection supplies candidates; manual curation is the only final ROI decision; 06 re-extracts fluorescence from the motion-corrected movie.</tspan>
+</text>
+</svg>

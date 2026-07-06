@@ -113,7 +113,7 @@ def existing_trial_dirs(folder: Path) -> list[Path]:
             if folder_has_own_oir(child):
                 trial_dirs.append(child)
         except OSError as exc:
-            LOGGER.warning("无法检查文件夹 %s：%s", child, exc)
+            LOGGER.warning("Could not inspect folder %s: %s", child, exc)
     return trial_dirs
 
 
@@ -157,7 +157,7 @@ def prepare_original_root(data_root: Path, original_root_name: str, action: str,
         return original_root
 
     if dry_run:
-        LOGGER.info("[dry-run] 将确保原始数据根目录存在：%s", original_root)
+        LOGGER.info("[dry-run] Would ensure raw data root exists: %s", original_root)
     else:
         original_root.mkdir(parents=True, exist_ok=True)
 
@@ -165,16 +165,16 @@ def prepare_original_root(data_root: Path, original_root_name: str, action: str,
         destination = original_root / source.name
         if destination.exists():
             if action == "skip":
-                LOGGER.info("跳过已存在的原始目标路径：%s", destination)
+                LOGGER.info("Skipping existing raw destination path: %s", destination)
                 continue
-            LOGGER.error("拒绝覆盖已存在的原始项目：%s", destination)
+            LOGGER.error("Refusing to overwrite existing raw item: %s", destination)
             continue
 
         if dry_run:
-            LOGGER.info("[dry-run] 将移动原始项目：%s -> %s", source, destination)
+            LOGGER.info("[dry-run] Would move raw item: %s -> %s", source, destination)
         else:
             shutil.move(str(source), str(destination))
-            LOGGER.info("已移动原始项目：%s -> %s", source, destination)
+            LOGGER.info("Moved raw item: %s -> %s", source, destination)
 
     if dry_run and not original_root.exists():
         return data_root
@@ -274,7 +274,7 @@ def update_metadata_csv(
     new_ids = [trial_id for trial_id in sorted(trial_ids) if trial_id not in existing_ids]
 
     if not new_ids:
-        LOGGER.info("metadata.csv 已是最新：%s", csv_path)
+        LOGGER.info("metadata.csv is already up to date: %s", csv_path)
         return 0
 
     if dry_run:
@@ -294,7 +294,7 @@ def update_metadata_csv(
         for trial_id in new_ids:
             writer.writerow({"Trial_ID": trial_id})
 
-    LOGGER.info("已新增 %d 行 metadata 记录：%s", len(new_ids), csv_path)
+    LOGGER.info("Added %d metadata row(s): %s", len(new_ids), csv_path)
     return len(new_ids)
 
 
@@ -310,14 +310,14 @@ def apply_move_plan(
 
     for plan in plans:
         if plan.destination.exists() and action == "skip":
-            LOGGER.info("跳过已存在的目标路径：%s", plan.destination)
+            LOGGER.info("Skipping existing destination path: %s", plan.destination)
             skipped += 1
             continue
 
         if dry_run:
             if plan.destination.exists() and action == "overwrite":
-                LOGGER.info("[dry-run] 将替换文件：%s", plan.destination)
-            LOGGER.info("[dry-run] 将移动：%s -> %s", plan.source, plan.destination)
+                LOGGER.info("[dry-run] Would replace file: %s", plan.destination)
+            LOGGER.info("[dry-run] Would move: %s -> %s", plan.source, plan.destination)
             moved += 1
             continue
 
@@ -326,20 +326,20 @@ def apply_move_plan(
 
             if plan.destination.exists():
                 if action != "overwrite":
-                    LOGGER.info("跳过已存在的目标路径：%s", plan.destination)
+                    LOGGER.info("Skipping existing destination path: %s", plan.destination)
                     skipped += 1
                     continue
                 if plan.destination.is_dir():
-                    LOGGER.error("拒绝覆盖目录：%s", plan.destination)
+                    LOGGER.error("Refusing to overwrite directory: %s", plan.destination)
                     failed += 1
                     continue
                 plan.destination.unlink()
 
             shutil.move(str(plan.source), str(plan.destination))
-            LOGGER.info("已移动：%s -> %s", plan.source, plan.destination)
+            LOGGER.info("Moved: %s -> %s", plan.source, plan.destination)
             moved += 1
         except OSError as exc:
-            LOGGER.error("移动失败 %s -> %s：%s", plan.source, plan.destination, exc)
+            LOGGER.error("Move failed %s -> %s: %s", plan.source, plan.destination, exc)
             failed += 1
 
     return moved, skipped, failed
@@ -350,21 +350,21 @@ def organize_folder(folder: Path, action: str, dry_run: bool) -> FolderSummary:
     summary = FolderSummary(folder=folder)
 
     if not folder.exists():
-        LOGGER.error("文件夹不存在：%s", folder)
+        LOGGER.error("Folder does not exist: %s", folder)
         summary.failed += 1
         return summary
     if not folder.is_dir():
-        LOGGER.error("路径不是文件夹：%s", folder)
+        LOGGER.error("Path is not a folder: %s", folder)
         summary.failed += 1
         return summary
 
-    LOGGER.info("正在检查文件夹：%s", folder)
+    LOGGER.info("Inspecting folder: %s", folder)
     plans, trial_ids = build_move_plan(folder)
     summary.trial_ids = trial_ids
     summary.planned_moves = len(plans)
 
     if not plans and not trial_ids:
-        LOGGER.info("未发现直接放置的 .oir 文件或已整理的 trial 文件夹：%s", folder)
+        LOGGER.info("No direct .oir files or organized trial folders found: %s", folder)
         return summary
 
     LOGGER.info(
@@ -460,10 +460,10 @@ def main(argv: list[str] | None = None) -> int:
 
     data_root = args.data_root.expanduser().resolve()
     if not data_root.exists():
-        LOGGER.error("数据根目录不存在：%s", data_root)
+        LOGGER.error("Data root does not exist: %s", data_root)
         return 1
     if not data_root.is_dir():
-        LOGGER.error("数据根目录不是文件夹：%s", data_root)
+        LOGGER.error("Data root is not a folder: %s", data_root)
         return 1
 
     original_root = prepare_original_root(
@@ -473,23 +473,23 @@ def main(argv: list[str] | None = None) -> int:
         dry_run=args.dry_run,
     )
 
-    LOGGER.info("数据根目录：%s", data_root)
-    LOGGER.info("原始数据目录：%s", original_root)
-    LOGGER.info("布局模式：%s", args.layout)
-    LOGGER.info("冲突处理方式：%s", args.action)
-    LOGGER.info("运行模式：%s", "dry-run" if args.dry_run else "实际应用修改")
+    LOGGER.info("Data root: %s", data_root)
+    LOGGER.info("Raw data root: %s", original_root)
+    LOGGER.info("Layout mode: %s", args.layout)
+    LOGGER.info("Conflict policy: %s", args.action)
+    LOGGER.info("Run mode: %s", "dry-run" if args.dry_run else "apply changes")
 
     try:
         work_folders = discover_work_folders(original_root, args.layout)
     except OSError as exc:
-        LOGGER.error("无法检查数据根目录 %s：%s", data_root, exc)
+        LOGGER.error("Could not inspect data root %s: %s", data_root, exc)
         return 1
 
     if not work_folders:
-        LOGGER.warning("在以下路径下没有可处理的文件夹：%s", data_root)
+        LOGGER.warning("No processable folders were found under: %s", data_root)
         return 0
 
-    LOGGER.info("已选择 %d 个待处理文件夹。", len(work_folders))
+    LOGGER.info("Selected %d folder(s) for processing.", len(work_folders))
 
     run_summary = RunSummary(folders_seen=len(work_folders))
     for folder in work_folders:
@@ -504,13 +504,13 @@ def main(argv: list[str] | None = None) -> int:
         run_summary.failed += folder_summary.failed
         run_summary.metadata_rows_added += folder_summary.metadata_rows_added
 
-    LOGGER.info("汇总：")
-    LOGGER.info("  已处理文件夹数：%d", run_summary.folders_seen)
-    LOGGER.info("  计划移动数：%d", run_summary.planned_moves)
-    LOGGER.info("  已移动或将移动：%d", run_summary.moved)
-    LOGGER.info("  跳过：%d", run_summary.skipped)
-    LOGGER.info("  失败：%d", run_summary.failed)
-    LOGGER.info("  已新增或计划新增的 metadata 行数：%d", run_summary.metadata_rows_added)
+    LOGGER.info("Summary:")
+    LOGGER.info("  folders seen: %d", run_summary.folders_seen)
+    LOGGER.info("  planned moves: %d", run_summary.planned_moves)
+    LOGGER.info("  moved or would move: %d", run_summary.moved)
+    LOGGER.info("  skipped: %d", run_summary.skipped)
+    LOGGER.info("  failed: %d", run_summary.failed)
+    LOGGER.info("  metadata rows added or planned: %d", run_summary.metadata_rows_added)
 
     return 1 if run_summary.failed else 0
 
