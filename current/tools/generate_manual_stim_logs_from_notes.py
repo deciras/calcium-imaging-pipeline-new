@@ -28,6 +28,10 @@ PULSE_CONFIG_RE = re.compile(
 COUNT_RE = re.compile(r"(\d+)\s*次")
 
 
+def milliseconds_to_seconds(value_ms: str) -> float:
+    return float(value_ms) / 1000.0
+
+
 @dataclass(frozen=True)
 class TrialBlock:
     trial_id: str
@@ -291,10 +295,10 @@ def parse_trial_spec(block: TrialBlock, defaults: dict[str, float | int]) -> tup
 
     pulse_match = PULSE_CONFIG_RE.search(block.detail)
     if pulse_match:
-        stim_on_sec = float(pulse_match.group(1))
-        pulse_off_sec = float(pulse_match.group(2))
+        stim_on_sec = milliseconds_to_seconds(pulse_match.group(1))
+        pulse_off_sec = milliseconds_to_seconds(pulse_match.group(2))
         pulse_count = int(pulse_match.group(3))
-        initial_delay_sec = float(pulse_match.group(4))
+        initial_delay_sec = milliseconds_to_seconds(pulse_match.group(4))
         return (
             TrialSpec(
                 trial_id=block.trial_id,
