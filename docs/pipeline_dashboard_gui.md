@@ -14,7 +14,7 @@ bash linux_workstation/launch_pipeline_dashboard.sh "$DATA_ROOT"
 ```
 
 That launcher defaults to `DASHBOARD_ENV=dashboard_gui` and
-`CONDA_BIN=/home/yifei/anaconda3/bin/conda`.
+auto-detects a common `conda` path unless you override `CONDA_BIN`.
 
 The dashboard is a controller for `current/run_pipeline.py`. Heavy processing
 still runs in a child process, so the dashboard window remains responsive while
@@ -53,7 +53,7 @@ remain separate from this dashboard.
 Default Fiji paths:
 
 - macOS: `/Applications/Fiji.app`
-- Linux workstation: `/home/yifei/Fiji/fiji-linux-x64`
+- Linux: `~/Fiji`, `~/Fiji.app`, `/opt/Fiji`, `/opt/Fiji.app`, `/usr/local/Fiji`
 
 Default Fiji memory:
 

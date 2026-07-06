@@ -59,6 +59,11 @@ STEP_OUTPUT_PATTERNS = (
     "*_dff_distribution.pdf",
     "*_neuropil_correction_examples.png",
     "*_neuropil_correction_examples.pdf",
+    "*_artifact_regression_examples.png",
+    "*_artifact_regression_examples.pdf",
+    "*_artifact_qc_summary.png",
+    "*_artifact_qc_summary.pdf",
+    "*_artifact_components.csv",
     "*_roi_spatial_activity_map.png",
     "*_roi_spatial_activity_map.pdf",
     "*_dff_summary.json",
@@ -551,6 +556,189 @@ def extract_traces_from_corrected_movie(
     return np.vstack(f_rows).astype(np.float32), np.vstack(fneu_rows).astype(np.float32)
 
 
+def build_background_tile_traces(
+    movie: np.ndarray,
+    roi_masks: list[np.ndarray],
+    pad_radius: int,
+    grid_rows: int,
+    grid_cols: int,
+    min_pixels: int,
+) -> tuple[np.ndarray, dict]:
+    try:
+        from scipy import ndimage as ndi
+    except Exception:
+        ndi = None
+
+    shape_yx = tuple(movie.shape[-2:])
+    exclusion_mask = np.zeros(shape_yx, dtype=bool)
+    for mask in roi_masks:
+        exclusion_mask |= mask
+    if ndi is not None and pad_radius > 0:
+        exclusion_mask = ndi.binary_dilation(exclusion_mask, iterations=int(pad_radius))
+
+    nonroi_mask = ~exclusion_mask
+    tile_traces: list[np.ndarray] = []
+    tile_labels: list[str] = []
+    y_edges = np.linspace(0, shape_yx[0], max(2, int(grid_rows)) + 1, dtype=int)
+    x_edges = np.linspace(0, shape_yx[1], max(2, int(grid_cols)) + 1, dtype=int)
+    for gy in range(len(y_edges) - 1):
+        for gx in range(len(x_edges) - 1):
+            y0, y1 = int(y_edges[gy]), int(y_edges[gy + 1])
+            x0, x1 = int(x_edges[gx]), int(x_edges[gx + 1])
+            tile_mask = np.zeros(shape_yx, dtype=bool)
+            tile_mask[y0:y1, x0:x1] = True
+            sample_mask = tile_mask & nonroi_mask
+            if int(np.count_nonzero(sample_mask)) < int(min_pixels):
+                continue
+            pixels = np.asarray(movie[:, sample_mask], dtype=np.float32)
+            trace = np.nanmedian(pixels, axis=1).astype(np.float32)
+            tile_traces.append(trace)
+            tile_labels.append(f"tile_r{gy + 1:02d}_c{gx + 1:02d}")
+
+    info = {
+        "n_nonroi_pixels": int(np.count_nonzero(nonroi_mask)),
+        "n_tiles_total": int(max(1, int(grid_rows)) * max(1, int(grid_cols))),
+        "n_tiles_kept": int(len(tile_traces)),
+        "tile_labels": tile_labels,
+    }
+    if not tile_traces:
+        return np.zeros((movie.shape[0], 0), dtype=np.float32), info
+    return np.column_stack(tile_traces).astype(np.float32), info
+
+
+def standardize_columns(matrix: np.ndarray, min_std: float = 1e-6) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    if matrix.ndim != 2:
+        raise ValueError(f"Expected 2D matrix for column standardization, got {matrix.shape}")
+    if matrix.shape[1] == 0:
+        return matrix.astype(np.float32, copy=True), np.zeros((0,), dtype=np.float32), np.ones((0,), dtype=np.float32)
+    mean = np.nanmean(matrix, axis=0).astype(np.float32)
+    centered = matrix - mean[np.newaxis, :]
+    scale = np.nanstd(centered, axis=0).astype(np.float32)
+    scale[~np.isfinite(scale) | (scale < min_std)] = 1.0
+    return (centered / scale[np.newaxis, :]).astype(np.float32), mean, scale
+
+
+def compute_artifact_components(
+    movie_path: Path,
+    stat: np.ndarray,
+    selected: np.ndarray,
+    pad_radius: int,
+    grid_rows: int,
+    grid_cols: int,
+    min_pixels: int,
+    n_components: int,
+) -> tuple[np.ndarray, dict]:
+    movie = movie_as_tyx(movie_path)
+    shape_yx = tuple(movie.shape[-2:])
+    roi_masks: list[np.ndarray] = []
+    for suite2p_idx in selected:
+        mask, _ = stat_mask(stat[int(suite2p_idx)], shape_yx)
+        roi_masks.append(mask)
+
+    background_traces, bg_info = build_background_tile_traces(
+        movie=movie,
+        roi_masks=roi_masks,
+        pad_radius=pad_radius,
+        grid_rows=grid_rows,
+        grid_cols=grid_cols,
+        min_pixels=min_pixels,
+    )
+    if background_traces.shape[1] == 0:
+        return np.zeros((movie.shape[0], 0), dtype=np.float32), {
+            **bg_info,
+            "method": "none",
+            "reason": "no_background_tiles",
+            "n_components_requested": int(n_components),
+            "n_components_used": 0,
+        }
+
+    global_trace = np.nanmedian(background_traces, axis=1, keepdims=True).astype(np.float32)
+    standardized, _, _ = standardize_columns(background_traces)
+    if standardized.shape[1] == 0:
+        return global_trace, {
+            **bg_info,
+            "method": "global_only",
+            "reason": "no_standardized_tiles",
+            "n_components_requested": int(n_components),
+            "n_components_used": 1,
+        }
+
+    u, s, _ = np.linalg.svd(standardized, full_matrices=False)
+    max_pc = int(min(max(0, n_components), u.shape[1]))
+    pcs = u[:, :max_pc] * s[:max_pc][np.newaxis, :]
+    components = np.column_stack([global_trace, pcs]).astype(np.float32)
+    components, _, _ = standardize_columns(components)
+    info = {
+        **bg_info,
+        "method": "nonroi_tile_pca",
+        "reason": "ok",
+        "n_components_requested": int(n_components),
+        "n_components_used": int(components.shape[1]),
+    }
+    return components.astype(np.float32), info
+
+
+def corrcoef_safe(x: np.ndarray, y: np.ndarray) -> float:
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    valid = np.isfinite(x) & np.isfinite(y)
+    if int(np.count_nonzero(valid)) < 3:
+        return np.nan
+    xv = x[valid]
+    yv = y[valid]
+    xstd = float(np.nanstd(xv))
+    ystd = float(np.nanstd(yv))
+    if xstd <= 0 or ystd <= 0:
+        return np.nan
+    return float(np.corrcoef(xv, yv)[0, 1])
+
+
+def regress_artifact_components(
+    f_corrected: np.ndarray,
+    components: np.ndarray,
+) -> tuple[np.ndarray, pd.DataFrame]:
+    n_roi, n_frames = f_corrected.shape
+    if components.ndim != 2 or components.shape[0] != n_frames or components.shape[1] == 0:
+        empty = pd.DataFrame(
+            {
+                "roi_id": np.arange(1, n_roi + 1, dtype=int),
+                "artifact_r2": np.zeros((n_roi,), dtype=float),
+                "artifact_corr_before": np.full((n_roi,), np.nan, dtype=float),
+                "artifact_corr_after": np.full((n_roi,), np.nan, dtype=float),
+                "artifact_beta_l2": np.zeros((n_roi,), dtype=float),
+            }
+        )
+        return f_corrected.astype(np.float32, copy=True), empty
+
+    x = np.asarray(components, dtype=np.float32)
+    x_centered = x - np.nanmean(x, axis=0, keepdims=True)
+    xtx_inv_xt = np.linalg.pinv(x_centered)
+    global_component = x_centered[:, 0] if x_centered.shape[1] else np.full((n_frames,), np.nan, dtype=np.float32)
+
+    cleaned_rows = []
+    qc_rows = []
+    for roi_idx in range(n_roi):
+        y = np.asarray(f_corrected[roi_idx], dtype=np.float32)
+        y_centered = y - np.nanmean(y)
+        beta = xtx_inv_xt @ y_centered
+        fitted = x_centered @ beta
+        cleaned = (y_centered - fitted) + np.nanmean(y)
+        var_total = float(np.nanvar(y_centered))
+        var_resid = float(np.nanvar(cleaned - np.nanmean(cleaned)))
+        artifact_r2 = 0.0 if var_total <= 0 else max(0.0, min(1.0, 1.0 - (var_resid / var_total)))
+        cleaned_rows.append(cleaned.astype(np.float32))
+        qc_rows.append(
+            {
+                "roi_id": int(roi_idx + 1),
+                "artifact_r2": float(artifact_r2),
+                "artifact_corr_before": corrcoef_safe(y, global_component),
+                "artifact_corr_after": corrcoef_safe(cleaned, global_component),
+                "artifact_beta_l2": float(np.linalg.norm(beta)),
+            }
+        )
+    return np.vstack(cleaned_rows).astype(np.float32), pd.DataFrame(qc_rows)
+
+
 def first_stim_start_sec(stim_events: pd.DataFrame) -> float | None:
     if stim_events.empty or "start_time_sec" not in stim_events.columns:
         return None
@@ -691,7 +879,10 @@ def build_roi_table(
     f_corrected: np.ndarray,
     f0: np.ndarray,
     dff: np.ndarray,
+    artifact_qc: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
+    artifact_qc = artifact_qc.copy() if artifact_qc is not None else pd.DataFrame()
+    artifact_lookup = artifact_qc.set_index("roi_id") if not artifact_qc.empty and "roi_id" in artifact_qc.columns else pd.DataFrame()
     rows = []
     f0_stat = f0 if f0.shape == dff.shape else np.repeat(f0, dff.shape[1], axis=1)
     for out_idx, stat_idx in enumerate(selected):
@@ -725,6 +916,10 @@ def build_roi_table(
                 "std_dff": std_dff,
                 "max_dff": max_dff,
                 "snr_like": float(max_dff / std_dff) if std_dff > 0 else np.nan,
+                "artifact_r2": float(artifact_lookup.at[out_idx + 1, "artifact_r2"]) if not artifact_lookup.empty and (out_idx + 1) in artifact_lookup.index else np.nan,
+                "artifact_corr_before": float(artifact_lookup.at[out_idx + 1, "artifact_corr_before"]) if not artifact_lookup.empty and (out_idx + 1) in artifact_lookup.index else np.nan,
+                "artifact_corr_after": float(artifact_lookup.at[out_idx + 1, "artifact_corr_after"]) if not artifact_lookup.empty and (out_idx + 1) in artifact_lookup.index else np.nan,
+                "artifact_beta_l2": float(artifact_lookup.at[out_idx + 1, "artifact_beta_l2"]) if not artifact_lookup.empty and (out_idx + 1) in artifact_lookup.index else np.nan,
             }
         )
     return pd.DataFrame(rows)
@@ -974,6 +1169,105 @@ def save_neuropil_examples(
         plt.close(fig)
 
 
+def save_artifact_regression_examples(
+    f_corrected_before: np.ndarray,
+    f_corrected_after: np.ndarray,
+    dff_before: np.ndarray,
+    dff_after: np.ndarray,
+    roi_table: pd.DataFrame,
+    components: np.ndarray,
+    fps: float,
+    stim_events: pd.DataFrame,
+    output_path: Path,
+    trial_id: str,
+    dpi: int,
+    plot_format: str,
+) -> None:
+    import matplotlib.pyplot as plt
+
+    if components.ndim != 2 or components.shape[1] == 0:
+        LOGGER.warning("Skipping artifact regression examples for %s: no artifact components available.", trial_id)
+        return
+    score = pd.to_numeric(roi_table.get("artifact_r2", pd.Series(np.nan, index=roi_table.index)), errors="coerce").to_numpy()
+    indices = deterministic_example_indices(score, n_examples=min(6, dff_after.shape[0]))
+    if not indices:
+        return
+    time_axis = np.arange(dff_after.shape[1]) / fps
+    nrows = len(indices) + 1
+    fig, axes = plt.subplots(nrows, 1, figsize=(12, max(4, 2.0 * nrows)), sharex=True)
+    if nrows == 1:
+        axes = [axes]
+
+    bg_ax = axes[0]
+    for comp_idx in range(min(3, components.shape[1])):
+        bg_ax.plot(time_axis, components[:, comp_idx], lw=0.9, label=f"artifact comp {comp_idx + 1}")
+    mark_stimuli(bg_ax, stim_events)
+    bg_ax.set_ylabel("BG comps")
+    bg_ax.legend(loc="upper right", frameon=False)
+    bg_ax.spines["top"].set_visible(False)
+    bg_ax.spines["right"].set_visible(False)
+
+    for ax, idx in zip(axes[1:], indices):
+        mark_stimuli(ax, stim_events)
+        ax.plot(time_axis, dff_before[idx], lw=0.7, color="tab:gray", alpha=0.8, label="before")
+        ax.plot(time_axis, dff_after[idx], lw=0.8, color="tab:red", alpha=0.9, label="after")
+        row = roi_table.iloc[idx]
+        ax.set_ylabel(
+            f"ROI {int(row.get('roi_id', idx + 1))}\nR2={float(row.get('artifact_r2', np.nan)):.2f}",
+            rotation=0,
+            labelpad=40,
+            va="center",
+        )
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+    axes[-1].set_xlabel("Time (s)")
+    handles, labels = axes[1].get_legend_handles_labels() if len(axes) > 1 else axes[0].get_legend_handles_labels()
+    if labels:
+        axes[1 if len(axes) > 1 else 0].legend(loc="upper right", frameon=False)
+    fig.suptitle(f"Artifact regression examples - {trial_id}", y=0.995)
+    fig.tight_layout()
+    try:
+        save_figure(fig, output_path, plot_format=plot_format, dpi=dpi)
+    finally:
+        plt.close(fig)
+
+
+def save_artifact_qc_summary(
+    roi_table: pd.DataFrame,
+    output_path: Path,
+    trial_id: str,
+    dpi: int,
+    plot_format: str,
+) -> None:
+    import matplotlib.pyplot as plt
+
+    columns = [
+        ("artifact_r2", "Artifact R2"),
+        ("artifact_corr_before", "Corr before"),
+        ("artifact_corr_after", "Corr after"),
+        ("artifact_beta_l2", "Artifact beta L2"),
+    ]
+    fig, axes = plt.subplots(2, 2, figsize=(10, 7))
+    for ax, (column, title) in zip(axes.ravel(), columns):
+        values = pd.to_numeric(roi_table.get(column, pd.Series(dtype=float)), errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+        if values.empty:
+            ax.text(0.5, 0.5, f"No {column}", ha="center", va="center")
+            ax.set_axis_off()
+            continue
+        ax.hist(values, bins=min(40, max(8, int(np.sqrt(len(values))))), color="tab:purple", alpha=0.78)
+        ax.axvline(values.median(), color="tab:orange", lw=1.4, label="median")
+        ax.set_title(title)
+        ax.set_xlabel(title)
+        ax.set_ylabel("ROI count")
+        ax.legend(frameon=False)
+    fig.suptitle(f"Artifact QC summary - {trial_id}", y=0.995)
+    fig.tight_layout()
+    try:
+        save_figure(fig, output_path, plot_format=plot_format, dpi=dpi)
+    finally:
+        plt.close(fig)
+
+
 def save_roi_spatial_activity_map(
     roi_table: pd.DataFrame,
     output_path: Path,
@@ -1021,6 +1315,9 @@ def write_qc_plots(
     f_raw: np.ndarray | None = None,
     fneu: np.ndarray | None = None,
     f_corrected: np.ndarray | None = None,
+    dff_before_artifact: np.ndarray | None = None,
+    f_corrected_before_artifact: np.ndarray | None = None,
+    artifact_components: np.ndarray | None = None,
 ) -> None:
     if args.plot_level == "none":
         return
@@ -1034,6 +1331,46 @@ def write_qc_plots(
             plot_jobs.append(("neuropil correction examples", save_neuropil_examples, dict(f_raw=f_raw, fneu=fneu, f_corrected=f_corrected, dff=dff, roi_table=roi_table, fps=fps, stim_events=stim_events, output_path=out_dir / f"{trial_id}_neuropil_correction_examples", trial_id=trial_id, dpi=args.plot_dpi, plot_format=args.plot_format)))
         else:
             LOGGER.warning("Skipping neuropil correction examples for %s: missing saved F arrays.", trial_id)
+        if (
+            args.artifact_regression != "none"
+            and dff_before_artifact is not None
+            and f_corrected_before_artifact is not None
+            and artifact_components is not None
+            and artifact_components.shape[1] > 0
+        ):
+            plot_jobs.append(
+                (
+                    "artifact regression examples",
+                    save_artifact_regression_examples,
+                    dict(
+                        f_corrected_before=f_corrected_before_artifact,
+                        f_corrected_after=f_corrected,
+                        dff_before=dff_before_artifact,
+                        dff_after=dff,
+                        roi_table=roi_table,
+                        components=artifact_components,
+                        fps=fps,
+                        stim_events=stim_events,
+                        output_path=out_dir / f"{trial_id}_artifact_regression_examples",
+                        trial_id=trial_id,
+                        dpi=args.plot_dpi,
+                        plot_format=args.plot_format,
+                    ),
+                )
+            )
+            plot_jobs.append(
+                (
+                    "artifact QC summary",
+                    save_artifact_qc_summary,
+                    dict(
+                        roi_table=roi_table,
+                        output_path=out_dir / f"{trial_id}_artifact_qc_summary",
+                        trial_id=trial_id,
+                        dpi=args.plot_dpi,
+                        plot_format=args.plot_format,
+                    ),
+                )
+            )
         plot_jobs.append(("ROI spatial activity map", save_roi_spatial_activity_map, dict(roi_table=roi_table, output_path=out_dir / f"{trial_id}_roi_spatial_activity_map", trial_id=trial_id, dpi=args.plot_dpi, plot_format=args.plot_format)))
     for label, func, kwargs in plot_jobs:
         try:
@@ -1149,7 +1486,52 @@ def process_trial(trial: TrialInput, out_dir: Path, args: argparse.Namespace) ->
         trace_source_used = "manual_or_suite2p_F.npy" if manual_inputs is not None else "suite2p_F.npy"
         neuropil_source = "manual_or_suite2p_Fneu.npy" if manual_inputs is not None else "suite2p_Fneu.npy"
 
-    f_corrected = (f_raw - args.neuropil_coeff * fneu).astype(np.float32)
+    f_corrected_before_artifact = (f_raw - args.neuropil_coeff * fneu).astype(np.float32)
+    artifact_components = np.zeros((f_corrected_before_artifact.shape[1], 0), dtype=np.float32)
+    artifact_info = {
+        "method": "none",
+        "reason": "artifact_regression_disabled",
+        "n_components_requested": 0,
+        "n_components_used": 0,
+    }
+    artifact_qc = pd.DataFrame(
+        {
+            "roi_id": np.arange(1, f_corrected_before_artifact.shape[0] + 1, dtype=int),
+            "artifact_r2": np.zeros((f_corrected_before_artifact.shape[0],), dtype=float),
+            "artifact_corr_before": np.full((f_corrected_before_artifact.shape[0],), np.nan, dtype=float),
+            "artifact_corr_after": np.full((f_corrected_before_artifact.shape[0],), np.nan, dtype=float),
+            "artifact_beta_l2": np.zeros((f_corrected_before_artifact.shape[0],), dtype=float),
+        }
+    )
+    if args.artifact_regression != "none":
+        if args.trace_source != "motion-corrected" or trace_movie_path is None:
+            artifact_info = {
+                "method": args.artifact_regression,
+                "reason": "artifact_regression_requires_motion_corrected_trace_source",
+                "n_components_requested": int(args.artifact_n_components),
+                "n_components_used": 0,
+            }
+        else:
+            artifact_components, artifact_info = compute_artifact_components(
+                movie_path=trace_movie_path,
+                stat=stat,
+                selected=selected,
+                pad_radius=args.artifact_exclusion_radius,
+                grid_rows=args.artifact_grid_rows,
+                grid_cols=args.artifact_grid_cols,
+                min_pixels=args.artifact_min_pixels,
+                n_components=args.artifact_n_components,
+            )
+            if artifact_components.shape[1] > 0:
+                f_corrected, artifact_qc = regress_artifact_components(
+                    f_corrected=f_corrected_before_artifact,
+                    components=artifact_components,
+                )
+            else:
+                f_corrected = f_corrected_before_artifact.astype(np.float32, copy=True)
+    else:
+        f_corrected = f_corrected_before_artifact.astype(np.float32, copy=True)
+
     f0, f0_info = compute_f0(
         f_corrected=f_corrected,
         fps=fps,
@@ -1179,9 +1561,30 @@ def process_trial(trial: TrialInput, out_dir: Path, args: argparse.Namespace) ->
         f_corrected=f_corrected,
         f0=f0,
         dff=dff,
+        artifact_qc=artifact_qc,
     )
     roi_table.to_csv(out_dir / f"{trial.trial_id}_roi_table.csv", index=False)
     write_dff_traces_csv(out_dir / f"{trial.trial_id}_dff_traces.csv", dff=dff, fps=fps)
+    if artifact_components.shape[1] > 0:
+        pd.DataFrame(
+            artifact_components,
+            columns=[f"artifact_component_{i + 1:02d}" for i in range(artifact_components.shape[1])],
+        ).assign(frame=np.arange(artifact_components.shape[0], dtype=int), time_sec=np.arange(artifact_components.shape[0], dtype=float) / float(fps)).to_csv(
+            out_dir / f"{trial.trial_id}_artifact_components.csv",
+            index=False,
+        )
+
+    f0_before_artifact, _ = compute_f0(
+        f_corrected=f_corrected_before_artifact,
+        fps=fps,
+        stim_events=stim_events,
+        f0_mode=args.f0_mode,
+        f0_percentile=args.f0_percentile,
+        f0_window_sec=args.f0_window_sec,
+        default_baseline_sec=args.default_baseline_sec,
+        min_baseline_frames=args.min_baseline_frames,
+    )
+    dff_before_artifact = compute_dff(f_corrected_before_artifact, f0=f0_before_artifact, eps=args.f0_eps)
 
     summary = {
         "trial_id": trial.trial_id,
@@ -1200,6 +1603,21 @@ def process_trial(trial: TrialInput, out_dir: Path, args: argparse.Namespace) ->
         "trace_movie_path": str(trace_movie_path) if trace_movie_path is not None else None,
         "neuropil_source": neuropil_source,
         "neuropil_coeff": float(args.neuropil_coeff),
+        "artifact_regression": args.artifact_regression,
+        "artifact_n_components": int(args.artifact_n_components),
+        "artifact_grid_rows": int(args.artifact_grid_rows),
+        "artifact_grid_cols": int(args.artifact_grid_cols),
+        "artifact_exclusion_radius": int(args.artifact_exclusion_radius),
+        "artifact_min_pixels": int(args.artifact_min_pixels),
+        "artifact_method_used": artifact_info.get("method"),
+        "artifact_reason": artifact_info.get("reason"),
+        "artifact_components_used": int(artifact_info.get("n_components_used", 0)),
+        "artifact_tiles_kept": int(artifact_info.get("n_tiles_kept", 0)),
+        "artifact_nonroi_pixels": int(artifact_info.get("n_nonroi_pixels", 0)),
+        "mean_artifact_r2": float(pd.to_numeric(artifact_qc["artifact_r2"], errors="coerce").mean()),
+        "median_artifact_r2": float(pd.to_numeric(artifact_qc["artifact_r2"], errors="coerce").median()),
+        "mean_artifact_corr_before": float(pd.to_numeric(artifact_qc["artifact_corr_before"], errors="coerce").mean()),
+        "mean_artifact_corr_after": float(pd.to_numeric(artifact_qc["artifact_corr_after"], errors="coerce").mean()),
         "f0_eps": float(args.f0_eps),
         "mean_dff": float(np.nanmean(dff)),
         "max_dff": float(np.nanmax(dff)),
@@ -1223,6 +1641,9 @@ def process_trial(trial: TrialInput, out_dir: Path, args: argparse.Namespace) ->
         f_raw=f_raw,
         fneu=fneu,
         f_corrected=f_corrected,
+        dff_before_artifact=dff_before_artifact,
+        f_corrected_before_artifact=f_corrected_before_artifact,
+        artifact_components=artifact_components,
     )
 
     selected_records = roi_table[
@@ -1285,6 +1706,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--neuropil-inner-radius", type=int, default=2, help="Step 06 motion-corrected trace mode: pixels excluded around each ROI before neuropil sampling.")
     parser.add_argument("--neuropil-outer-radius", type=int, default=20, help="Step 06 motion-corrected trace mode: outer neuropil ring radius in pixels.")
     parser.add_argument("--min-neuropil-pixels", type=int, default=50, help="Step 06 motion-corrected trace mode: minimum neuropil pixels before expanding the ring.")
+    parser.add_argument(
+        "--artifact-regression",
+        choices=("none", "nonroi-pca"),
+        default="none",
+        help="Optional spatially aware artifact regression performed after local neuropil subtraction.",
+    )
+    parser.add_argument("--artifact-n-components", type=int, default=3, help="Number of non-ROI PCA-like background components, excluding the global median trace.")
+    parser.add_argument("--artifact-grid-rows", type=int, default=4, help="Number of rows for non-ROI background tiles.")
+    parser.add_argument("--artifact-grid-cols", type=int, default=4, help="Number of columns for non-ROI background tiles.")
+    parser.add_argument("--artifact-exclusion-radius", type=int, default=4, help="Pixels dilated around all ROI masks before sampling non-ROI background tiles.")
+    parser.add_argument("--artifact-min-pixels", type=int, default=100, help="Minimum non-ROI pixels required to keep one background tile.")
     parser.add_argument(
         "--f0-mode",
         choices=("percentile", "rolling-percentile", "rolling-median", "stim-baseline"),

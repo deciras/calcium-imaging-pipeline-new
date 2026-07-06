@@ -71,7 +71,7 @@ class PipelineStep:
 PIPELINE_STEPS: tuple[PipelineStep, ...] = (
     PipelineStep(
         step_id="00",
-        name="整理 OIR 原始文件",
+        name="Organize raw OIR files",
         script="preprocess/00_oir_file_manager.py",
         accepts_data_root=True,
         accepts_layout=True,
@@ -80,7 +80,7 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
     ),
     PipelineStep(
         step_id="01",
-        name="Fiji 将 OIR 转为 TIF",
+        name="Convert OIR to TIF with Fiji",
         script="preprocess/01_fiji_totif_ini.py",
         env="fiji_env",
         accepts_data_root=True,
@@ -94,7 +94,7 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
     ),
     PipelineStep(
         step_id="02",
-        name="生成刺激映射",
+        name="Generate stimulus map",
         script="preprocess/02_generate_stim_map.py",
         env="caiman",
         accepts_data_root=True,
@@ -104,20 +104,22 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
         accepts_stim_log_root=True,
         accepts_analog_source=True,
         accepts_raw_z_strategy=True,
+        accepts_trial_id=True,
     ),
     PipelineStep(
         step_id="03",
-        name="CaImAn 运动校正",
+        name="CaImAn motion correction",
         script="preprocess/03_motion_correct_func_caiman.py",
         env="caiman",
         accepts_data_root=True,
         accepts_action=True,
         accepts_step_dry_run=True,
         accepts_output_root=True,
+        accepts_trial_id=True,
     ),
     PipelineStep(
         step_id="04",
-        name="空间高通滤波",
+        name="Spatial high-pass filter",
         script="preprocess/04_spatial_highpass.py",
         env="caiman",
         accepts_data_root=True,
@@ -127,10 +129,11 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
         accepts_sigma_px=True,
         accepts_clip_negative=True,
         accepts_dpi=True,
+        accepts_trial_id=True,
     ),
     PipelineStep(
         step_id="05",
-        name="suite2p ROI 检测",
+        name="suite2p ROI detection",
         script="roi/05_suite2p_roi_detection_schema_aligned_connected.py",
         env="suite2p",
         accepts_data_root=True,
@@ -138,10 +141,11 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
         accepts_step_dry_run=True,
         accepts_output_root=True,
         accepts_suite2p_options=True,
+        accepts_trial_id=True,
     ),
     PipelineStep(
         step_id="cellpose",
-        name="Cellpose ROI 分割",
+        name="Cellpose ROI segmentation",
         script="roi/05_cellpose_roi_segmentation.py",
         env="czi_cellpose",
         accepts_data_root=True,
@@ -152,7 +156,7 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
     ),
     PipelineStep(
         step_id="manual",
-        name="手动 ROI 筛选界面",
+        name="Manual ROI curation GUI",
         script="roi/05_manual_roi_curation_gui.py",
         env="caiman",
         accepts_data_root=True,
@@ -161,7 +165,7 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
     ),
     PipelineStep(
         step_id="06",
-        name="提取 dF/F",
+        name="Extract dF/F",
         script="analysis/06_extract_dff.py",
         env="postmanual_analysis",
         accepts_data_root=True,
@@ -174,7 +178,7 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
     ),
     PipelineStep(
         step_id="07",
-        name="检测钙事件",
+        name="Detect calcium events",
         script="analysis/07_detect_events.py",
         env="postmanual_analysis",
         accepts_data_root=True,
@@ -186,7 +190,7 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
     ),
     PipelineStep(
         step_id="08",
-        name="刺激响应分析",
+        name="Stimulus response analysis",
         script="analysis/08_stim_response_analysis.py",
         env="postmanual_analysis",
         accepts_data_root=True,
@@ -198,7 +202,7 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
     ),
     PipelineStep(
         step_id="09",
-        name="偏振角调谐分析",
+        name="AoLP tuning analysis",
         script="analysis/09_angle_tuning_analysis.py",
         env="postmanual_analysis",
         accepts_data_root=True,
@@ -210,7 +214,7 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
     ),
     PipelineStep(
         step_id="10",
-        name="绘制 ROI 曲线",
+        name="Plot ROI traces",
         script="analysis/10_trace_plots.py",
         env="postmanual_analysis",
         accepts_data_root=True,
@@ -222,7 +226,7 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
     ),
     PipelineStep(
         step_id="11",
-        name="群体特征提取",
+        name="Extract population features",
         script="analysis/11_population_features.py",
         env="postmanual_analysis",
         accepts_data_root=True,
@@ -233,7 +237,7 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
     ),
     PipelineStep(
         step_id="12",
-        name="刺激切片特征提取",
+        name="Extract stimulus-slice features",
         script="analysis/12_stimulus_slice_features.py",
         env="postmanual_analysis",
         accepts_data_root=True,
@@ -244,7 +248,7 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
     ),
     PipelineStep(
         step_id="13",
-        name="群体相似性分析",
+        name="Population similarity analysis",
         script="analysis/13_population_similarity.py",
         env="postmanual_analysis",
         accepts_data_root=True,
@@ -255,7 +259,7 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
     ),
     PipelineStep(
         step_id="14",
-        name="层次聚类",
+        name="Hierarchical clustering",
         script="analysis/14_hierarchical_clustering.py",
         env="postmanual_analysis",
         accepts_data_root=True,
@@ -267,7 +271,7 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
     ),
     PipelineStep(
         step_id="15",
-        name="Leiden 社区检测",
+        name="Leiden community detection",
         script="analysis/15_leiden_community_detection.py",
         env="postmanual_analysis",
         accepts_data_root=True,
@@ -279,7 +283,7 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
     ),
     PipelineStep(
         step_id="16",
-        name="降维分析",
+        name="Dimensionality reduction",
         script="analysis/16_dimensionality_reduction.py",
         env="postmanual_analysis",
         accepts_data_root=True,
@@ -290,7 +294,7 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
     ),
     PipelineStep(
         step_id="17",
-        name="跨 trial 汇总",
+        name="Cross-trial summary",
         script="analysis/17_cross_trial_summary.py",
         env="postmanual_analysis",
         accepts_data_root=True,
@@ -300,7 +304,7 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
     ),
     PipelineStep(
         step_id="18",
-        name="生成报告",
+        name="Generate report",
         script="analysis/18_report_generator.py",
         env="postmanual_analysis",
         accepts_data_root=True,
@@ -318,6 +322,24 @@ class ResolvedStep:
     config: PipelineStep
     script_path: Path
     command: tuple[str, ...]
+
+
+DATE_FILTERABLE_STEP_IDS = {
+    "00",
+    "01",
+    "02",
+    "03",
+    "04",
+    "05",
+    "cellpose",
+    "06",
+    "07",
+    "08",
+    "09",
+    "10",
+    "11",
+    "12",
+}
 
 
 def configure_logging(verbose: bool) -> None:
@@ -362,6 +384,77 @@ def default_stim_log_root(data_root: Path | None) -> Path | None:
             return candidate
 
     return None
+
+
+def normalize_date_id(date_id: str | None) -> str | None:
+    if date_id is None:
+        return None
+    clean = date_id.strip()
+    if not clean:
+        return None
+    if len(clean) != 8 or not clean.isdigit():
+        raise ValueError("--date-id must be an 8-digit date like 20251205.")
+    return clean
+
+
+def trial_id_matches_date(trial_id: str, date_id: str) -> bool:
+    return trial_id.startswith(f"{date_id}_")
+
+
+def candidate_date_roots(data_root: Path, date_id: str) -> list[Path]:
+    candidates = [data_root / "00_original_files" / date_id, data_root / date_id]
+    if data_root.name == "00_original_files":
+        candidates.insert(0, data_root / date_id)
+    return candidates
+
+
+def resolve_date_scoped_data_root(data_root: Path | None, date_id: str | None) -> Path | None:
+    if data_root is None or date_id is None:
+        return data_root
+    for candidate in candidate_date_roots(data_root, date_id):
+        if candidate.exists() and candidate.is_dir():
+            return candidate
+    return None
+
+
+def discover_trial_ids_for_date(
+    data_root: Path | None,
+    output_root: Path | None,
+    date_id: str | None,
+) -> list[str]:
+    if data_root is None or date_id is None:
+        return []
+
+    trial_ids: list[str] = []
+    seen: set[str] = set()
+
+    for date_root in candidate_date_roots(data_root, date_id):
+        if not date_root.exists() or not date_root.is_dir():
+            continue
+        for child in sorted(date_root.iterdir()):
+            if not child.is_dir():
+                continue
+            if not trial_id_matches_date(child.name, date_id):
+                continue
+            if child.name not in seen:
+                seen.add(child.name)
+                trial_ids.append(child.name)
+
+    scan_root = output_root or data_root
+    for step_dir_name in ("01_oir_to_tif", "03_motion_correct", "04_spatial_highpass", "05_suite2p"):
+        step_root = scan_root / step_dir_name
+        if not step_root.exists() or not step_root.is_dir():
+            continue
+        for child in sorted(step_root.iterdir()):
+            if not child.is_dir():
+                continue
+            if not trial_id_matches_date(child.name, date_id):
+                continue
+            if child.name not in seen:
+                seen.add(child.name)
+                trial_ids.append(child.name)
+
+    return trial_ids
 
 
 def parse_step_selector(raw_selector: str | None) -> set[str] | None:
@@ -772,7 +865,7 @@ def check_conda_available(steps: list[PipelineStep], conda_bin: str) -> None:
             "--conda-bin /path/to/conda."
         )
 
-    LOGGER.info("使用 conda：%s", conda_path)
+    LOGGER.info("Using conda: %s", conda_path)
 
 
 def resolve_steps(
@@ -816,6 +909,7 @@ def resolve_steps(
     overlay_dpi: int | None,
     neuropil_coeff: float | None,
     trial_id: str | None,
+    date_id: str | None,
     movie_kind: str | None,
     roi_source: str | None,
     f0_mode: str | None,
@@ -857,6 +951,13 @@ def resolve_steps(
     if not code_dir.is_dir():
         raise NotADirectoryError(f"Code directory is not a folder: {code_dir}")
 
+    date_scoped_data_root = resolve_date_scoped_data_root(data_root, date_id)
+    if date_id and data_root is not None and date_scoped_data_root is None:
+        LOGGER.warning("Date root was not found for %s under %s; date filtering will rely on trial IDs only.", date_id, data_root)
+    date_trial_ids = discover_trial_ids_for_date(data_root, output_root, date_id)
+    if date_id and not date_trial_ids:
+        LOGGER.warning("No trial IDs were discovered for date %s. Some selected steps may still use the full data root.", date_id)
+
     resolved: list[ResolvedStep] = []
     for step in selected_steps:
         script_path = Path(step.script)
@@ -873,9 +974,23 @@ def resolve_steps(
                 f"Step {step.step_id} script path is not a file: {script_path}"
             )
 
+        effective_data_root = data_root
+        if date_id and step.step_id in {"00", "01"} and date_scoped_data_root is not None:
+            effective_data_root = date_scoped_data_root
+
+        effective_trial_id = trial_id
+        if effective_trial_id is None and date_id and date_trial_ids and step.accepts_trial_id and step.step_id != "manual":
+            effective_trial_id = ",".join(date_trial_ids)
+
+        if date_id and trial_id is None and step.step_id not in DATE_FILTERABLE_STEP_IDS:
+            LOGGER.warning(
+                "Step %s does not currently support --date-id filtering and will use the full data root.",
+                step.step_id,
+            )
+
         managed_args = build_managed_step_args(
             step=step,
-            data_root=data_root,
+            data_root=effective_data_root,
             output_root=output_root,
             layout=layout,
             action=action,
@@ -910,7 +1025,7 @@ def resolve_steps(
             tau=tau,
             overlay_dpi=overlay_dpi,
             neuropil_coeff=neuropil_coeff,
-            trial_id=trial_id,
+            trial_id=effective_trial_id,
             movie_kind=movie_kind,
             roi_source=roi_source,
             f0_mode=f0_mode,
@@ -956,7 +1071,7 @@ def resolve_steps(
 
 
 def print_step_table(steps: list[PipelineStep]) -> None:
-    LOGGER.info("可用步骤：")
+    LOGGER.info("Available steps:")
     for step in steps:
         env_label = normalize_env_name(step.env) or "current"
         LOGGER.info(
@@ -969,9 +1084,9 @@ def print_step_table(steps: list[PipelineStep]) -> None:
 
 
 def print_plan(code_dir: Path, steps: list[ResolvedStep], dry_run: bool) -> None:
-    LOGGER.info("代码目录：%s", code_dir.expanduser().resolve())
-    LOGGER.info("启动器模式：%s", "仅展示计划" if dry_run else "执行命令")
-    LOGGER.info("已选择步骤：")
+    LOGGER.info("Code directory: %s", code_dir.expanduser().resolve())
+    LOGGER.info("Launcher mode: %s", "plan only" if dry_run else "execute commands")
+    LOGGER.info("Selected steps:")
     for index, step in enumerate(steps, start=1):
         env_label = normalize_env_name(step.config.env) or "current"
         LOGGER.info(
@@ -981,19 +1096,19 @@ def print_plan(code_dir: Path, steps: list[ResolvedStep], dry_run: bool) -> None
             env_label,
             step.config.name,
         )
-        LOGGER.info("     脚本：%s", step.script_path)
-        LOGGER.info("     命令：%s", subprocess.list2cmdline(step.command))
+        LOGGER.info("     Script: %s", step.script_path)
+        LOGGER.info("     Command: %s", subprocess.list2cmdline(step.command))
 
 
 def run_step(step: ResolvedStep) -> bool:
     """Run one selected pipeline step."""
     step_label = f"{step.config.step_id} {step.config.name}"
-    banner(f"开始步骤 {step_label}")
+    banner(f"Starting step {step_label}")
     start_time = time.time()
 
-    LOGGER.info("脚本：%s", step.script_path)
-    LOGGER.info("工作目录：%s", step.script_path.parent)
-    LOGGER.info("命令：%s", subprocess.list2cmdline(step.command))
+    LOGGER.info("Script: %s", step.script_path)
+    LOGGER.info("Working directory: %s", step.script_path.parent)
+    LOGGER.info("Command: %s", subprocess.list2cmdline(step.command))
 
     child_env = os.environ.copy()
     tmp_root = Path(child_env.get("TMPDIR") or tempfile.gettempdir()).expanduser()
@@ -1015,7 +1130,7 @@ def run_step(step: ResolvedStep) -> bool:
         )
         return_code = process.wait()
     except KeyboardInterrupt:
-        LOGGER.error("运行步骤 %s 时被用户中断。", step_label)
+        LOGGER.error("Step %s was interrupted by the user.", step_label)
         raise
     except OSError as exc:
         LOGGER.exception("Could not start step %s: %s", step_label, exc)
@@ -1023,11 +1138,11 @@ def run_step(step: ResolvedStep) -> bool:
 
     elapsed = time.time() - start_time
     if return_code == 0:
-        LOGGER.info("步骤 %s 成功完成，耗时 %.2f 秒。", step_label, elapsed)
+        LOGGER.info("Step %s completed successfully in %.2f seconds.", step_label, elapsed)
         return True
 
     LOGGER.error(
-        "步骤 %s 失败，退出代码 %s，耗时 %.2f 秒。",
+        "Step %s failed with exit code %s after %.2f seconds.",
         step_label,
         return_code,
         elapsed,
@@ -1203,6 +1318,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--neuropil-coeff", type=float, default=None, help="Steps manual/06: coefficient for Fneu subtraction.")
     parser.add_argument("--trial-id", default=None, help="Manual step: trial folder name to open in the manual ROI curation GUI.")
     parser.add_argument(
+        "--date-id",
+        default=None,
+        help=(
+            "Only process one imaging date such as 20251205. "
+            "Supported by date-filterable steps; explicit --trial-id takes priority."
+        ),
+    )
+    parser.add_argument(
         "--movie-kind",
         choices=("raw", "corrected", "spatial-highpass"),
         default=None,
@@ -1331,6 +1454,11 @@ def main(argv: list[str] | None = None) -> int:
     passthrough_args = split_passthrough_args(args.step_args)
     data_root = args.data_root.expanduser().resolve() if args.data_root else None
     output_root = args.output_root.expanduser().resolve() if args.output_root else None
+    try:
+        date_id = normalize_date_id(args.date_id)
+    except ValueError as exc:
+        LOGGER.error("%s", exc)
+        return 2
     stim_log_root = (
         args.stim_log_root.expanduser().resolve()
         if args.stim_log_root
@@ -1379,6 +1507,7 @@ def main(argv: list[str] | None = None) -> int:
             overlay_dpi=args.overlay_dpi,
             neuropil_coeff=args.neuropil_coeff,
             trial_id=args.trial_id,
+            date_id=date_id,
             movie_kind=args.movie_kind,
             roi_source=args.roi_source,
             f0_mode=args.f0_mode,
@@ -1413,14 +1542,14 @@ def main(argv: list[str] | None = None) -> int:
             passthrough_args=passthrough_args,
         )
     except Exception as exc:
-        LOGGER.error("配置错误：%s", exc)
+        LOGGER.error("Configuration error: %s", exc)
         return 1
 
     banner("Calcium imaging pipeline launcher")
     print_plan(args.code_dir, resolved_steps, args.dry_run)
 
     if args.dry_run:
-        LOGGER.info("dry-run 完成，未启动任何步骤脚本。")
+        LOGGER.info("Dry-run complete; no step scripts were launched.")
         return 0
 
     total_start = time.time()
@@ -1436,17 +1565,17 @@ def main(argv: list[str] | None = None) -> int:
 
         failed.append(label)
         if not args.continue_on_failure:
-            LOGGER.error("由于该步骤失败，停止后续执行：%s", label)
+            LOGGER.error("Stopping remaining execution because this step failed: %s", label)
             break
 
     total_elapsed = time.time() - total_start
     banner("Pipeline summary", "#")
-    LOGGER.info("成功步骤：%d/%d", len(succeeded), len(resolved_steps))
+    LOGGER.info("Successful steps: %d/%d", len(succeeded), len(resolved_steps))
     if succeeded:
-        LOGGER.info("成功的步骤：%s", ", ".join(succeeded))
+        LOGGER.info("Succeeded: %s", ", ".join(succeeded))
     if failed:
-        LOGGER.error("失败的步骤：%s", ", ".join(failed))
-    LOGGER.info("启动器总耗时：%.2f 分钟", total_elapsed / 60.0)
+        LOGGER.error("Failed: %s", ", ".join(failed))
+    LOGGER.info("Total launcher runtime: %.2f minutes", total_elapsed / 60.0)
 
     return 1 if failed else 0
 

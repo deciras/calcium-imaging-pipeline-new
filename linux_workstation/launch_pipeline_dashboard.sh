@@ -7,14 +7,30 @@ if [[ $# -gt 0 ]]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+if command -v readlink >/dev/null 2>&1; then
+  RESOLVED_PATH="$(readlink -f "${SCRIPT_PATH}" 2>/dev/null || true)"
+  if [[ -n "${RESOLVED_PATH}" ]]; then
+    SCRIPT_PATH="${RESOLVED_PATH}"
+  fi
+fi
+SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_PATH}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-DEFAULT_CONDA="/home/yifei/anaconda3/bin/conda"
-if [[ -x "${DEFAULT_CONDA}" ]]; then
-  CONDA_BIN="${CONDA_BIN:-${DEFAULT_CONDA}}"
-else
-  CONDA_BIN="${CONDA_BIN:-conda}"
+if [[ -z "${CONDA_BIN:-}" ]]; then
+  for candidate in \
+    "${HOME}/anaconda3/bin/conda" \
+    "${HOME}/miniconda3/bin/conda" \
+    "/opt/conda/bin/conda" \
+    "/usr/local/anaconda3/bin/conda"
+  do
+    if [[ -x "${candidate}" ]]; then
+      CONDA_BIN="${candidate}"
+      break
+    fi
+  done
 fi
+CONDA_BIN="${CONDA_BIN:-conda}"
 DASHBOARD_ENV="${DASHBOARD_ENV:-dashboard_gui}"
 
 if ! command -v "${CONDA_BIN}" >/dev/null 2>&1 && [[ ! -x "${CONDA_BIN}" ]]; then

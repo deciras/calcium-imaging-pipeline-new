@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Calcium Pipeline Dashboard
+Comment=Launch the calcium imaging pipeline dashboard
+Exec=/mnt/50d357b2-473b-4533-8c74-1db99704876a/yifeiding/calcium_imaging/calcium-imaging-pipeline-new/linux_workstation/launch_pipeline_dashboard.sh
+Path=/mnt/50d357b2-473b-4533-8c74-1db99704876a/yifeiding/calcium_imaging/calcium-imaging-pipeline-new
+Terminal=true
+StartupNotify=true
+Categories=Science;

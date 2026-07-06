@@ -61,7 +61,7 @@ class TrialInput:
     trial_id: str
     rel_parent: Path
     input_dir: Path
-    stim_path: Path
+    stim_path: Path | None
     metadata_path: Path
     raw_stim_dir: Path | None = None
     raw_oir_path: Path | None = None
@@ -205,14 +205,14 @@ def clean_step_outputs(out_dir: Path, trial_id: str) -> int:
                 child.unlink()
                 removed += 1
         slices_dir.rmdir()
-        LOGGER.info("已删除旧的 step-02 文件夹：%s", slices_dir)
+        LOGGER.info("Removed old step-02 directory: %s", slices_dir)
 
     for suffix in OUTPUT_SUFFIXES:
         path = out_dir / f"{trial_id}{suffix}"
         if path.exists() and path.is_file():
             path.unlink()
             removed += 1
-            LOGGER.info("已删除旧的 step-02 文件：%s", path)
+            LOGGER.info("Removed old step-02 file: %s", path)
     return removed
 
 
@@ -343,7 +343,7 @@ def discover_stim_protocols(stim_log_root: Path | None) -> list[StimProtocol]:
     if stim_log_root is None:
         return []
     if not stim_log_root.exists():
-        LOGGER.warning("刺激日志根目录不存在：%s", stim_log_root)
+        LOGGER.warning("Stimulus log root does not exist: %s", stim_log_root)
         return []
 
     protocols: list[StimProtocol] = []
@@ -379,7 +379,7 @@ def discover_stim_protocols(stim_log_root: Path | None) -> list[StimProtocol]:
             )
         )
 
-    LOGGER.info("找到 %d 个刺激协议日志。", len(protocols))
+    LOGGER.info("Found %d stimulus protocol log(s).", len(protocols))
     return protocols
 
 
@@ -439,31 +439,45 @@ def packet_blocks_from_pulse_blocks(stim_blocks: list[dict], protocol: StimProto
 def protocol_event_time_in_trial(
     event: dict,
     trial_start_estimate: datetime | None,
-) -> tuple[float | None, float | None]:
-    if trial_start_estimate is None:
-        return None, None
+) -> tuple[float | None, float | None, str]:
+    onset_sec: float | None = None
+    timing_source = "protocol_relative_time_fallback"
 
     host_time = parse_host_datetime(event.get("host_timestamp"))
-    if host_time is None:
-        return None, None
+    if trial_start_estimate is not None and host_time is not None:
+        onset_sec = (host_time - trial_start_estimate).total_seconds()
+        timing_source = "protocol_absolute_time_fallback"
+    else:
+        onset_sec = _as_float_or_none(event.get("mcu_onset_sec"))
 
-    onset_sec = (host_time - trial_start_estimate).total_seconds()
     duration = _as_float_or_none(event.get("duration_sec"))
     if duration is None:
         mcu_onset = _as_float_or_none(event.get("mcu_onset_sec"))
         mcu_offset = _as_float_or_none(event.get("mcu_offset_sec"))
         if mcu_onset is not None and mcu_offset is not None:
             duration = mcu_offset - mcu_onset
+    if onset_sec is None:
+        return None, None, timing_source
     if duration is None or duration <= 0:
-        return round(float(onset_sec), 3), None
-    return round(float(onset_sec), 3), round(float(onset_sec + duration), 3)
+        return round(float(onset_sec), 3), None, timing_source
+    return round(float(onset_sec), 3), round(float(onset_sec + duration), 3), timing_source
 
 
 def match_stim_protocol(
     protocols: list[StimProtocol],
     trial_start_estimate: datetime | None,
+    trial_id: str | None = None,
 ) -> tuple[StimProtocol | None, float | None]:
-    if trial_start_estimate is None or not protocols:
+    if not protocols:
+        return None, None
+
+    if trial_id:
+        for protocol in protocols:
+            target_trial_id = str(protocol.config.get("target_trial_id", "") or "").strip()
+            if protocol.run_id == trial_id or target_trial_id == trial_id:
+                return protocol, 0.0
+
+    if trial_start_estimate is None:
         return None, None
 
     best_protocol: StimProtocol | None = None
@@ -496,29 +510,60 @@ def find_raw_oir_path(data_root: Path, trial_id: str, rel_parent: Path) -> Path 
     return None
 
 
+def infer_trial_id_from_step01_name(path: Path) -> str:
+    name = path.name
+    for suffix in ("_Stim_Analog.tif", "_Stim_Analog.tiff", "_Max_Proj.tif", "_Max_Proj.tiff", "_metadata.json"):
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+    return path.stem
+
+
 def discover_trials(input_root: Path, data_root: Path) -> list[TrialInput]:
-    trials: list[TrialInput] = []
-    for stim_path in sorted(input_root.rglob("*_Stim_Analog.tif")):
-        input_dir = stim_path.parent
+    trials_by_key: dict[tuple[Path, str], TrialInput] = {}
+    metadata_paths = sorted(input_root.rglob("*_metadata.json"))
+
+    for metadata_path in metadata_paths:
+        input_dir = metadata_path.parent
+        rel_parent = input_dir.parent.relative_to(input_root)
+        trial_id = input_dir.name
+        stim_path = find_first_existing(input_dir, ("*_Stim_Analog.tif", "*_Stim_Analog.tiff"))
+        key = (rel_parent, trial_id)
+        trials_by_key[key] = TrialInput(
+            trial_id=trial_id,
+            rel_parent=rel_parent,
+            input_dir=input_dir,
+            stim_path=stim_path,
+            metadata_path=metadata_path,
+            raw_stim_dir=find_raw_stim_dir(input_dir, trial_id),
+            raw_oir_path=find_raw_oir_path(data_root, trial_id, rel_parent),
+        )
+
+    for movie_path in sorted(
+        list(input_root.rglob("*_Max_Proj.tif")) + list(input_root.rglob("*_Max_Proj.tiff"))
+    ):
+        input_dir = movie_path.parent
+        rel_parent = input_dir.parent.relative_to(input_root)
+        trial_id = input_dir.name
+        key = (rel_parent, trial_id)
+        if key in trials_by_key:
+            continue
         metadata_path = find_first_existing(input_dir, ("*_metadata.json",))
         if metadata_path is None:
-            LOGGER.warning("由于缺少 metadata JSON，跳过 %s。", input_dir)
+            guessed = infer_trial_id_from_step01_name(movie_path)
+            LOGGER.warning("Skipping %s because metadata JSON is missing (guessed trial_id=%s).", input_dir, guessed)
             continue
-
-        trial_id = input_dir.name
-        rel_parent = input_dir.parent.relative_to(input_root)
-        trials.append(
-            TrialInput(
-                trial_id=trial_id,
-                rel_parent=rel_parent,
-                input_dir=input_dir,
-                stim_path=stim_path,
-                metadata_path=metadata_path,
-                raw_stim_dir=find_raw_stim_dir(input_dir, trial_id),
-                raw_oir_path=find_raw_oir_path(data_root, trial_id, rel_parent),
-            )
+        stim_path = find_first_existing(input_dir, ("*_Stim_Analog.tif", "*_Stim_Analog.tiff"))
+        trials_by_key[key] = TrialInput(
+            trial_id=trial_id,
+            rel_parent=rel_parent,
+            input_dir=input_dir,
+            stim_path=stim_path,
+            metadata_path=metadata_path,
+            raw_stim_dir=find_raw_stim_dir(input_dir, trial_id),
+            raw_oir_path=find_raw_oir_path(data_root, trial_id, rel_parent),
         )
-    return trials
+
+    return sorted(trials_by_key.values(), key=lambda trial: (str(trial.rel_parent), trial.trial_id))
 
 
 def estimate_trial_start_from_raw_file(raw_oir_path: Path | None, timepoints: int, dt: float) -> datetime | None:
@@ -652,7 +697,7 @@ def read_raw_analog_trace(raw_stim_dir: Path, raw_z_strategy: str) -> AnalogTrac
     per_z_rows: list[np.ndarray] = []
     for index, path in enumerate(files):
         if index == 0 or (index + 1) == len(files) or (index + 1) % 200 == 0:
-            LOGGER.debug("正在读取原始刺激模拟信号 %s（%d/%d）", path.name, index + 1, len(files))
+            LOGGER.debug("Reading raw stim analog %s (%d/%d)", path.name, index + 1, len(files))
         arr = tiff.imread(path)
         if arr.ndim == 2:
             z_means = np.asarray([float(np.nanmean(arr))], dtype=float)
@@ -698,7 +743,15 @@ def read_analog_trace(trial: TrialInput, analog_source: str, raw_z_strategy: str
     if analog_source == "raw":
         raise RuntimeError("Raw stim analog requested but complete raw folder is missing for {}".format(trial.trial_id))
 
+    if trial.stim_path is None:
+        raise FileNotFoundError("Projected stim analog TIFF is missing for {}".format(trial.trial_id))
+
     return read_projected_analog_trace(trial.stim_path)
+
+
+def synthetic_nostim_trace(timepoints: int) -> AnalogTrace:
+    n_frames = max(int(timepoints), 1)
+    return AnalogTrace(trace=np.zeros((n_frames,), dtype=float), source="no_analog_input")
 
 
 def make_time_windows(total_time: float, preferred_window_sec: float) -> list[tuple[float, float]]:
@@ -1177,7 +1230,10 @@ def build_events_rows(
     rows: list[dict] = []
     if protocol is not None:
         for idx, protocol_event in enumerate(protocol.events):
-            onset_sec, offset_sec = protocol_event_time_in_trial(protocol_event, trial_start_estimate)
+            onset_sec, offset_sec, fallback_timing_source = protocol_event_time_in_trial(
+                protocol_event,
+                trial_start_estimate,
+            )
             analog_block = stim_blocks[idx] if idx < len(stim_blocks) else nearest_stim_block(stim_blocks, onset_sec)
             analog_start = analog_block.get("start_time_sec", "") if analog_block else ""
             analog_end = analog_block.get("end_time_sec", "") if analog_block else ""
@@ -1200,7 +1256,7 @@ def build_events_rows(
                     if offset_sec is not None
                     else protocol_event.get("duration_sec", "")
                 )
-                timing_source = "protocol_absolute_time_fallback"
+                timing_source = fallback_timing_source
             analog_delta = (
                 round(float(analog_start) - float(onset_sec), 3)
                 if analog_start != "" and onset_sec is not None
@@ -1253,7 +1309,7 @@ def build_pulse_events_rows(
     rows: list[dict] = []
     pulse_period_sec = pulse_on_sec + pulse_off_sec
     for stim_idx, protocol_event in enumerate(protocol.events):
-        packet_onset_sec, _ = protocol_event_time_in_trial(protocol_event, trial_start_estimate)
+        packet_onset_sec, _, packet_timing_source = protocol_event_time_in_trial(protocol_event, trial_start_estimate)
         analog_block = nearest_stim_block(stim_blocks, packet_onset_sec)
         analog_packet_start = analog_block.get("start_time_sec", "") if analog_block else ""
         mcu_packet_start = protocol_event.get("mcu_onset_sec", "")
@@ -1278,11 +1334,14 @@ def build_pulse_events_rows(
                 analog_offset = pulse_block.get("end_time_sec", analog_offset)
                 timing_source = "analog_voltage_flash_with_protocol_metadata"
             else:
-                timing_source = (
-                    "protocol_absolute_time_plus_analog_packet"
-                    if analog_packet_start != ""
-                    else "protocol_absolute_time"
-                )
+                if analog_packet_start != "":
+                    timing_source = (
+                        "protocol_relative_time_plus_analog_packet"
+                        if packet_timing_source == "protocol_relative_time_fallback"
+                        else "protocol_absolute_time_plus_analog_packet"
+                    )
+                else:
+                    timing_source = packet_timing_source
 
             rows.append(
                 {
@@ -1641,7 +1700,7 @@ def process_trial(
         return None, [], [], "skipped"
 
     if dry_run:
-        LOGGER.info("[dry-run] 将处理 %s -> %s", trial.input_dir, out_dir)
+        LOGGER.info("[dry-run] Would process %s -> %s", trial.input_dir, out_dir)
         return None, [], [], "processed"
 
     if action == "overwrite":
@@ -1653,10 +1712,14 @@ def process_trial(
     n_z = int(meta.get("dimensions", {}).get("z_slices", 1) or 1)
     timepoints = int(meta.get("dimensions", {}).get("timepoints", 0) or 0)
     if dt <= 0:
-        LOGGER.warning("%s 的 frame_interval_sec=%s；将使用 1.0 秒。", trial.trial_id, dt)
+        LOGGER.warning("%s has frame_interval_sec=%s; using 1.0 second.", trial.trial_id, dt)
         dt = 1.0
 
-    analog_trace = read_analog_trace(trial, analog_source, raw_z_strategy)
+    if trial.stim_path is None and not raw_stim_complete(trial.raw_stim_dir):
+        LOGGER.info("%s has no stim analog; generating no_analog_input compatibility outputs.", trial.trial_id)
+        analog_trace = synthetic_nostim_trace(timepoints)
+    else:
+        analog_trace = read_analog_trace(trial, analog_source, raw_z_strategy)
     brightness_trace = analog_trace.trace
     analog_dt = dt * analog_trace.dt_scale
     time_axis = np.arange(len(brightness_trace)) * analog_dt
@@ -1677,7 +1740,11 @@ def process_trial(
         )
 
     trial_start_estimate = estimate_trial_start_from_metadata(meta, trial.raw_oir_path, timepoints, dt)
-    protocol, protocol_match_delta_sec = match_stim_protocol(protocols, trial_start_estimate)
+    protocol, protocol_match_delta_sec = match_stim_protocol(
+        protocols,
+        trial_start_estimate,
+        trial_id=trial.trial_id,
+    )
     if protocol is not None:
         LOGGER.info(
             "Matched %s to stimulus protocol %s (%s, absolute start delta %.3fs).",
@@ -1687,7 +1754,7 @@ def process_trial(
             protocol_match_delta_sec if protocol_match_delta_sec is not None else float("nan"),
         )
     else:
-        LOGGER.info("%s 未按绝对时间匹配到刺激协议；标记为 nostim。", trial.trial_id)
+        LOGGER.info("%s did not match any stimulus protocol by absolute time; marking as nostim.", trial.trial_id)
 
     packet_stim_blocks = packet_blocks_from_pulse_blocks(stim_blocks, protocol)
     events_rows = build_events_rows(
@@ -1746,7 +1813,7 @@ def save_combined_outputs(
 ) -> None:
     if dry_run:
         LOGGER.info(
-            "[dry-run] 将在 %s 中写入合并后的 stim_map.csv、stim_events.csv、stim_pulse_events.csv 和 stim_block_summary.csv",
+            "[dry-run] Would write combined stim_map.csv, stim_events.csv, stim_pulse_events.csv, and stim_block_summary.csv under %s",
             step_root,
         )
         return
@@ -1927,10 +1994,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if not input_root.exists():
         if args.dry_run:
-            LOGGER.warning("输入根目录尚不存在：%s", input_root)
-            LOGGER.info("dry-run 完成。step 02 处理数据前必须先运行 step 01。")
+            LOGGER.warning("Input root does not exist yet: %s", input_root)
+            LOGGER.info("Dry-run complete. Step 01 must run before step 02 can process data.")
             return 0
-        LOGGER.error("输入根目录不存在：%s", input_root)
+        LOGGER.error("Input root does not exist: %s", input_root)
         return 1
 
     trials = discover_trials(input_root, data_root)
@@ -1938,14 +2005,14 @@ def main(argv: list[str] | None = None) -> int:
         wanted = {item.strip() for item in args.trial_id.split(",") if item.strip()}
         trials = [trial for trial in trials if trial.trial_id in wanted]
     summary = RunSummary(found=len(trials))
-    LOGGER.info("输入根目录：%s", input_root)
-    LOGGER.info("输出根目录：%s", out_root)
-    LOGGER.info("模拟信号来源：%s", args.analog_source)
-    LOGGER.info("原始 z 轴策略：%s", args.raw_z_strategy)
-    LOGGER.info("找到 %d 个含 Stim_Analog 输出的 trial。", len(trials))
+    LOGGER.info("Input root: %s", input_root)
+    LOGGER.info("Output root: %s", out_root)
+    LOGGER.info("Analog source: %s", args.analog_source)
+    LOGGER.info("Raw z strategy: %s", args.raw_z_strategy)
+    LOGGER.info("Found %d step-01 trial(s), with or without stim analog.", len(trials))
     stim_log_root = args.stim_log_root.expanduser().resolve() if args.stim_log_root else default_stim_log_root(data_root)
     if stim_log_root is not None:
-        LOGGER.info("刺激日志根目录：%s", stim_log_root)
+        LOGGER.info("Stimulus log root: %s", stim_log_root)
     protocols = discover_stim_protocols(stim_log_root)
 
     all_summaries: list[dict] = []
@@ -1973,10 +2040,10 @@ def main(argv: list[str] | None = None) -> int:
 
         if status == "skipped":
             summary.skipped += 1
-            LOGGER.info("[跳过] %s", trial.trial_id)
+            LOGGER.info("[skip] %s", trial.trial_id)
         else:
             summary.processed += 1
-            LOGGER.info("[完成] %s", trial.trial_id)
+            LOGGER.info("[ok] %s", trial.trial_id)
 
         if summary_row is not None:
             all_summaries.append(summary_row)
@@ -2000,11 +2067,11 @@ def main(argv: list[str] | None = None) -> int:
             dry_run=args.dry_run,
         )
 
-    LOGGER.info("汇总：")
-    LOGGER.info("  找到：%d", summary.found)
-    LOGGER.info("  已处理或将处理：%d", summary.processed)
-    LOGGER.info("  跳过：%d", summary.skipped)
-    LOGGER.info("  失败：%d", summary.failed)
+    LOGGER.info("Summary:")
+    LOGGER.info("  found: %d", summary.found)
+    LOGGER.info("  processed or would process: %d", summary.processed)
+    LOGGER.info("  skipped: %d", summary.skipped)
+    LOGGER.info("  failed: %d", summary.failed)
     return 1 if summary.failed else 0
 
 

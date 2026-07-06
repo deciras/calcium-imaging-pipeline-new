@@ -574,6 +574,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-neuropil-pixels", type=int, default=350)
     parser.add_argument("--tau", type=float, default=1.0)
     parser.add_argument("--overlay-dpi", type=int, default=150)
+    parser.add_argument("--trial-id", help="Only process one trial ID, or a comma-separated list of trial IDs.")
     parser.add_argument("--verbose", action="store_true")
     return parser
 
@@ -598,6 +599,9 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     trials = discover_trials(input_root)
+    if args.trial_id:
+        wanted = {item.strip() for item in args.trial_id.split(",") if item.strip()}
+        trials = [trial for trial in trials if trial.trial_id in wanted]
     summary = RunSummary(found=len(trials))
     LOGGER.info("Input root : %s", input_root)
     LOGGER.info("Output root: %s", out_root)

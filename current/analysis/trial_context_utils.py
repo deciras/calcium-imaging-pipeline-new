@@ -55,11 +55,13 @@ def notes_root_candidates(output_root: Path) -> list[Path]:
     env_value = os.environ.get("CALCIUM_EXPERIMENT_NOTES_ROOT", "").strip()
     if env_value:
         candidates.append(Path(env_value).expanduser())
+    home = Path.home()
     candidates.extend(
         [
             output_root.parent / "notes_backup" / "钙成像实验记录",
             output_root.parent / "notes_backup" / "calcium_imaging_experiment_notes",
-            Path("/Users/dingyifei/EvernoteMigration/markdown/实验室/钙成像实验记录"),
+            home / "Documents" / "实验记录" / "钙成像实验记录",
+            home / "Documents" / "calcium_imaging_experiment_notes",
         ]
     )
     seen: set[str] = set()
