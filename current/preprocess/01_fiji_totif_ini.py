@@ -43,6 +43,12 @@ def default_original_root(data_root: Path) -> Path:
     return candidate if candidate.exists() else data_root
 
 
+def resolve_original_root(data_root: Path, explicit_original_root: Path | None) -> Path:
+    if explicit_original_root is None:
+        return default_original_root(data_root)
+    return explicit_original_root.expanduser().resolve()
+
+
 def candidate_fiji_bins() -> list[Path]:
     candidates: list[Path] = []
     home = Path.home()
@@ -265,6 +271,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Pipeline output root. Default: DATA_ROOT.",
     )
     parser.add_argument(
+        "--original-root",
+        type=Path,
+        help=(
+            "Optional raw-input root to process. Default: DATA_ROOT/00_original_files "
+            "when it exists, otherwise DATA_ROOT."
+        ),
+    )
+    parser.add_argument(
         "--fiji-bin",
         type=Path,
         help="Path to Fiji executable. If omitted, FIJI_BIN/FIJI_PATH and common locations are checked.",
@@ -357,9 +371,16 @@ def main(argv: list[str] | None = None) -> int:
         if args.output_root
         else default_output_root(data_root).resolve()
     )
+    raw_data_root = resolve_original_root(data_root, args.original_root)
     worker_script = args.worker_script.expanduser().resolve()
     if not worker_script.exists():
         LOGGER.error("Worker script not found: %s", worker_script)
+        return 1
+    if not raw_data_root.exists():
+        LOGGER.error("Raw data root does not exist: %s", raw_data_root)
+        return 1
+    if not raw_data_root.is_dir():
+        LOGGER.error("Raw data root is not a folder: %s", raw_data_root)
         return 1
 
     fiji_bin = find_fiji_bin(args.fiji_bin)
@@ -374,7 +395,7 @@ def main(argv: list[str] | None = None) -> int:
             LOGGER.info(
                 "Fiji arguments: %s",
                 build_fiji_args(
-                    default_original_root(data_root),
+                    raw_data_root,
                     output_root,
                     args.extension,
                     args.threads,
@@ -395,7 +416,7 @@ def main(argv: list[str] | None = None) -> int:
         fiji_bin=fiji_bin,
         worker_script=worker_script,
         worker_args=build_fiji_args(
-            default_original_root(data_root),
+            raw_data_root,
             output_root,
             args.extension,
             args.threads,
@@ -410,7 +431,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.dry_run:
         LOGGER.info("Dry-run only; Fiji will not be launched.")
         LOGGER.info("Data root: %s", data_root)
-        LOGGER.info("Raw data root: %s", default_original_root(data_root))
+        LOGGER.info("Raw data root: %s", raw_data_root)
         LOGGER.info("Output root: %s", output_root)
         LOGGER.info("Command: %s", subprocess.list2cmdline(command_preview))
         return 0
@@ -419,7 +440,7 @@ def main(argv: list[str] | None = None) -> int:
     ok = run_fiji_task(
         fiji_bin=fiji_bin,
         worker_script=worker_script,
-        data_root=default_original_root(data_root),
+        data_root=raw_data_root,
         output_root=output_root,
         extension=args.extension,
         threads=args.threads,

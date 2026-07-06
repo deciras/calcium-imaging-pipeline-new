@@ -42,6 +42,7 @@ class PipelineStep:
     accepts_action: bool = False
     accepts_step_dry_run: bool = False
     accepts_output_root: bool = False
+    accepts_original_root: bool = False
     accepts_fiji_memory: bool = False
     accepts_projection_mode: bool = False
     accepts_stim_export_mode: bool = False
@@ -87,6 +88,7 @@ PIPELINE_STEPS: tuple[PipelineStep, ...] = (
         accepts_action=True,
         accepts_step_dry_run=True,
         accepts_output_root=True,
+        accepts_original_root=True,
         accepts_fiji_memory=True,
         accepts_projection_mode=True,
         accepts_stim_export_mode=True,
@@ -325,7 +327,6 @@ class ResolvedStep:
 
 
 DATE_FILTERABLE_STEP_IDS = {
-    "00",
     "01",
     "02",
     "03",
@@ -571,6 +572,7 @@ def build_managed_step_args(
     step: PipelineStep,
     data_root: Path | None,
     output_root: Path | None,
+    original_root: Path | None,
     layout: str,
     action: str,
     step_dry_run: bool,
@@ -650,6 +652,9 @@ def build_managed_step_args(
 
     if output_root is not None and step.accepts_output_root:
         managed_args.extend(["--output-root", str(output_root)])
+
+    if original_root is not None and step.accepts_original_root:
+        managed_args.extend(["--original-root", str(original_root)])
 
     if step.accepts_layout:
         managed_args.extend(["--layout", layout])
@@ -975,8 +980,9 @@ def resolve_steps(
             )
 
         effective_data_root = data_root
-        if date_id and step.step_id in {"00", "01"} and date_scoped_data_root is not None:
-            effective_data_root = date_scoped_data_root
+        effective_original_root = None
+        if date_id and step.step_id == "01" and date_scoped_data_root is not None:
+            effective_original_root = date_scoped_data_root
 
         effective_trial_id = trial_id
         if effective_trial_id is None and date_id and date_trial_ids and step.accepts_trial_id and step.step_id != "manual":
@@ -992,6 +998,7 @@ def resolve_steps(
             step=step,
             data_root=effective_data_root,
             output_root=output_root,
+            original_root=effective_original_root,
             layout=layout,
             action=action,
             step_dry_run=step_dry_run,

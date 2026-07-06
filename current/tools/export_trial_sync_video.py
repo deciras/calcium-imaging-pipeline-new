@@ -175,12 +175,11 @@ def choose_frame_indices(total_frames: int, acquisition_fps: float, output_fps: 
         raise ValueError("output_fps must be > 0.")
     if speed <= 0:
         raise ValueError("speed must be > 0.")
-    stride = max(speed * acquisition_fps / output_fps, 1.0)
+    stride = speed * acquisition_fps / output_fps
     indices = np.floor(np.arange(0, total_frames, stride)).astype(int)
     indices = np.clip(indices, 0, total_frames - 1)
     if len(indices) == 0:
         indices = np.array([0], dtype=int)
-    indices = np.unique(indices)
     if max_frames is not None:
         indices = indices[: max(1, int(max_frames))]
     return indices
@@ -285,7 +284,7 @@ def render_video(
     acquisition_fps = load_fps(trial_paths.metadata_json)
     total_frames = int(raw_stack.shape[0])
     frame_indices = choose_frame_indices(total_frames, acquisition_fps, output_fps, speed, max_frames)
-    effective_speed = (frame_indices[1] - frame_indices[0]) * acquisition_fps / output_fps if len(frame_indices) > 1 else speed
+    effective_speed = speed
 
     brightness = pd.read_csv(trial_paths.brightness_trace_csv)
     stim_windows = load_stim_windows(trial_paths.stim_events_csv)
