@@ -148,12 +148,50 @@ python3 /absolute/path/to/calcium-imaging-pipeline-new/current/run_pipeline.py \
   - 当前 `current/` 代码布局与各步骤入口说明
 - [linux_workstation/README.md](./linux_workstation/README.md)
   - Linux 工作站运行说明
+- [windows/README.md](./windows/README.md)
+  - Windows 薄启动层说明
 - [envs/README.md](./envs/README.md)
   - 推荐 conda 环境命名与检查方式
 - [docs/run_pipeline_command_guide.md](./docs/run_pipeline_command_guide.md)
   - 常用运行命令示例
 - [docs/pipeline_dashboard_gui.md](./docs/pipeline_dashboard_gui.md)
   - Dashboard GUI 使用说明
+
+## 跨平台原则
+
+这个仓库不应该维护三套彼此复制的主代码。
+
+建议结构是：
+
+- 一份共享主代码
+  - `current/run_pipeline.py`
+  - `current/pipeline_dashboard_gui.py`
+  - `current/preprocess/`
+  - `current/roi/`
+  - `current/analysis/`
+- 每个平台一层很薄的入口和适配
+  - macOS:
+    - `current/launch_pipeline_dashboard.command`
+  - Linux:
+    - `linux_workstation/launch_pipeline_dashboard.sh`
+    - `linux_workstation/launch_pipeline_dashboard.desktop`
+  - Windows:
+    - `windows/launch_pipeline_dashboard.bat`
+    - `windows/launch_pipeline_dashboard.ps1`
+
+应该按平台分开的主要是：
+
+- 启动方式
+- 默认路径
+- `conda` / Fiji 定位
+- 桌面快捷方式
+
+不应该按平台复制的主要是：
+
+- pipeline 主逻辑
+- dashboard 主界面逻辑
+- trial / date 筛选规则
+- stim log、ROI、dF/F、response、tuning、summary 逻辑
 
 ## 图示
 
@@ -316,12 +354,51 @@ python3 /absolute/path/to/calcium-imaging-pipeline-new/current/run_pipeline.py \
   - layout of the maintained code under `current/`
 - [linux_workstation/README.md](./linux_workstation/README.md)
   - Linux workstation runner notes
+- [windows/README.md](./windows/README.md)
+  - Windows thin-launcher notes
 - [envs/README.md](./envs/README.md)
   - recommended conda environment naming and checks
 - [docs/run_pipeline_command_guide.md](./docs/run_pipeline_command_guide.md)
   - common launcher command examples
 - [docs/pipeline_dashboard_gui.md](./docs/pipeline_dashboard_gui.md)
   - dashboard GUI usage
+
+## Cross-Platform Principle
+
+This repository should not maintain three duplicated copies of the main code for
+macOS, Linux, and Windows.
+
+The intended split is:
+
+- one shared code path
+  - `current/run_pipeline.py`
+  - `current/pipeline_dashboard_gui.py`
+  - `current/preprocess/`
+  - `current/roi/`
+  - `current/analysis/`
+- one thin platform layer per OS
+  - macOS:
+    - `current/launch_pipeline_dashboard.command`
+  - Linux:
+    - `linux_workstation/launch_pipeline_dashboard.sh`
+    - `linux_workstation/launch_pipeline_dashboard.desktop`
+  - Windows:
+    - `windows/launch_pipeline_dashboard.bat`
+    - `windows/launch_pipeline_dashboard.ps1`
+
+The parts that should differ by platform are mostly:
+
+- launch style
+- default paths
+- `conda` / Fiji discovery
+- desktop shortcuts
+
+The parts that should remain shared are:
+
+- pipeline logic
+- dashboard GUI logic
+- trial / date filtering behavior
+- stimulus-log, ROI, dF/F, response, tuning, and summary logic
 
 ## Figures
 
